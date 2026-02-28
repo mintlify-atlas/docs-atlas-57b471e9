@@ -1,0 +1,158 @@
+{
+  "projectType": "framework",
+  "projectName": "Motia",
+  "projectDescription": "Multi-language backend framework unifying APIs, background jobs, workflows, streams, and AI agents with a single Step primitive.",
+  "theme": "aspen",
+  "primaryColor": "#7C3AED",
+  "lightColor": "#A78BFA",
+  "darkColor": "#5B21B6",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation",
+              "migration-guide"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/steps",
+              "concepts/triggers",
+              "concepts/context",
+              "concepts/handlers",
+              "concepts/state-management",
+              "concepts/streams"
+            ]
+          },
+          {
+            "group": "Triggers",
+            "pages": [
+              "triggers/http",
+              "triggers/queue",
+              "triggers/cron",
+              "triggers/state",
+              "triggers/stream"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-apis",
+              "guides/background-jobs",
+              "guides/workflows",
+              "guides/ai-agents",
+              "guides/real-time-streaming",
+              "guides/multi-language"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/configuration",
+              "advanced/iii-engine",
+              "advanced/middleware",
+              "advanced/observability",
+              "advanced/deployment",
+              "advanced/testing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "TypeScript/JavaScript",
+            "pages": [
+              "api/typescript/step",
+              "api/typescript/triggers",
+              "api/typescript/context",
+              "api/typescript/state-manager",
+              "api/typescript/streams",
+              "api/typescript/types"
+            ]
+          },
+          {
+            "group": "Python",
+            "pages": [
+              "api/python/step",
+              "api/python/triggers",
+              "api/python/context",
+              "api/python/state-manager",
+              "api/python/streams",
+              "api/python/types"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "api/cli/overview",
+              "api/cli/create",
+              "api/cli/dev",
+              "api/cli/build"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "examples/hello-world",
+              "examples/rest-api",
+              "examples/background-worker"
+            ]
+          },
+          {
+            "group": "Production Apps",
+            "pages": [
+              "examples/chessarena",
+              "examples/ai-research-agent",
+              "examples/streaming-chatbot",
+              "examples/gmail-automation",
+              "examples/github-pr-manager"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Unified Step primitive for all backend patterns",
+    "Multi-language support (TypeScript, JavaScript, Python)",
+    "HTTP APIs with validation and middleware",
+    "Background jobs and queues",
+    "Cron scheduling",
+    "Real-time streaming",
+    "State management",
+    "AI agent integration",
+    "Built-in observability",
+    "Powered by Rust-based iii engine"
+  ],
+  "publicApiSurface": [
+    "step() - Create a Step with config and handler",
+    "http() - HTTP trigger factory",
+    "queue() - Queue trigger factory",
+    "cron() - Cron trigger factory",
+    "state() - State trigger factory",
+    "stream() - Stream trigger factory",
+    "FlowContext - Handler context with enqueue, state, logger, streams",
+    "StateManager - State management API",
+    "Stream - Real-time streaming API",
+    "ApiRequest - HTTP request type",
+    "ApiResponse - HTTP response type",
+    "Enqueuer - Queue enqueue function",
+    "multiTriggerStep() - Multi-trigger step builder",
+    "initIII() - Initialize iii engine",
+    "Motia - Core runtime class"
+  ]
+}
