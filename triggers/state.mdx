@@ -1,0 +1,481 @@
+---
+title: State trigger
+description: React to state changes with event-driven workflows
+---
+
+State triggers allow you to execute workflows when state values change, enabling reactive patterns and event-driven architectures based on state mutations.
+
+## Basic usage
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, state } from 'motia'
+
+    export const config = step({
+      name: 'on-user-update',
+      triggers: [state()],
+    })
+
+    export const handler = async (input, ctx) => {
+      const { group_id, item_id, old_value, new_value } = input
+      
+      ctx.logger.info('State changed', {
+        group: group_id,
+        item: item_id,
+        from: old_value,
+        to: new_value,
+      })
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, state
+
+    config = step(
+        name='on-user-update',
+        triggers=[state()],
+    )
+
+    async def handler(input, ctx):
+        group_id = input['group_id']
+        item_id = input['item_id']
+        old_value = input.get('old_value')
+        new_value = input.get('new_value')
+        
+        ctx.logger.info('State changed', {
+            'group': group_id,
+            'item': item_id,
+            'from': old_value,
+            'to': new_value,
+        })
+    ```
+  </Tab>
+</Tabs>
+
+## Input structure
+
+State triggers receive an input object with the following structure:
+
+<ParamField path="type" type="'state'" required>
+  Always `'state'` for state triggers
+</ParamField>
+
+<ParamField path="group_id" type="string" required>
+  The group identifier (scope) where the state change occurred
+</ParamField>
+
+<ParamField path="item_id" type="string" required>
+  The item identifier (key) that changed
+</ParamField>
+
+<ParamField path="old_value" type="T | undefined">
+  The previous value before the change. `undefined` for new items
+</ParamField>
+
+<ParamField path="new_value" type="T | undefined">
+  The new value after the change. `undefined` for deleted items
+</ParamField>
+
+## Accessing state
+
+Read and write state within handlers:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, state } from 'motia'
+
+    export const config = step({
+      name: 'track-changes',
+      triggers: [state()],
+    })
+
+    export const handler = async (input, ctx) => {
+      const { group_id, item_id, new_value } = input
+      
+      // Read current state
+      const current = await ctx.state.get(group_id, item_id)
+      
+      // Update state
+      await ctx.state.set(group_id, `${item_id}_history`, {
+        timestamp: Date.now(),
+        value: new_value,
+      })
+      
+      ctx.logger.info('Change tracked')
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    import time
+    from motia import step, state
+
+    config = step(
+        name='track-changes',
+        triggers=[state()],
+    )
+
+    async def handler(input, ctx):
+        group_id = input['group_id']
+        item_id = input['item_id']
+        new_value = input.get('new_value')
+        
+        # Read current state
+        current = await ctx.state.get(group_id, item_id)
+        
+        # Update state
+        await ctx.state.set(group_id, f"{item_id}_history", {
+            'timestamp': time.time(),
+            'value': new_value,
+        })
+        
+        ctx.logger.info('Change tracked')
+    ```
+  </Tab>
+</Tabs>
+
+## Conditional triggers
+
+Filter state changes with conditions:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, state } from 'motia'
+
+    export const config = step({
+      name: 'on-status-active',
+      triggers: [
+        state((input, ctx) => {
+          const { new_value } = input
+          return new_value?.status === 'active'
+        }),
+      ],
+    })
+
+    export const handler = async (input, ctx) => {
+      ctx.logger.info('User activated', {
+        userId: input.item_id,
+      })
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, state
+
+    def status_active_condition(input, ctx):
+        new_value = input.get('new_value')
+        return new_value and new_value.get('status') == 'active'
+
+    config = step(
+        name='on-status-active',
+        triggers=[
+            state(condition=status_active_condition),
+        ],
+    )
+
+    async def handler(input, ctx):
+        ctx.logger.info('User activated', {
+            'userId': input['item_id'],
+        })
+    ```
+  </Tab>
+</Tabs>
+
+## Detecting change types
+
+Differentiate between creates, updates, and deletes:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const handler = async (input, ctx) => {
+      const { old_value, new_value, item_id } = input
+      
+      if (!old_value && new_value) {
+        // Create
+        ctx.logger.info('Item created', { item_id })
+      } else if (old_value && new_value) {
+        // Update
+        ctx.logger.info('Item updated', { item_id })
+      } else if (old_value && !new_value) {
+        // Delete
+        ctx.logger.info('Item deleted', { item_id })
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    async def handler(input, ctx):
+        old_value = input.get('old_value')
+        new_value = input.get('new_value')
+        item_id = input['item_id']
+        
+        if not old_value and new_value:
+            # Create
+            ctx.logger.info('Item created', {'item_id': item_id})
+        elif old_value and new_value:
+            # Update
+            ctx.logger.info('Item updated', {'item_id': item_id})
+        elif old_value and not new_value:
+            # Delete
+            ctx.logger.info('Item deleted', {'item_id': item_id})
+    ```
+  </Tab>
+</Tabs>
+
+## State operations
+
+### Set state
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    await ctx.state.set('users', 'user-123', {
+      name: 'John Doe',
+      status: 'active',
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    await ctx.state.set('users', 'user-123', {
+        'name': 'John Doe',
+        'status': 'active',
+    })
+    ```
+  </Tab>
+</Tabs>
+
+### Get state
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    const user = await ctx.state.get('users', 'user-123')
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    user = await ctx.state.get('users', 'user-123')
+    ```
+  </Tab>
+</Tabs>
+
+### Update state
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    await ctx.state.update('users', 'user-123', [
+      { type: 'set', path: 'status', value: 'inactive' },
+      { type: 'set', path: 'lastLogin', value: Date.now() },
+    ])
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    import time
+
+    await ctx.state.update('users', 'user-123', [
+        {'type': 'set', 'path': 'status', 'value': 'inactive'},
+        {'type': 'set', 'path': 'lastLogin', 'value': time.time()},
+    ])
+    ```
+  </Tab>
+</Tabs>
+
+### Delete state
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    await ctx.state.delete('users', 'user-123')
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    await ctx.state.delete('users', 'user-123')
+    ```
+  </Tab>
+</Tabs>
+
+### List items
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    const users = await ctx.state.list('users')
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    users = await ctx.state.list('users')
+    ```
+  </Tab>
+</Tabs>
+
+### Clear group
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    await ctx.state.clear('users')
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    await ctx.state.clear('users')
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration options
+
+<ParamField path="condition" type="function">
+  Optional function `(input, ctx) => boolean` to filter which state changes trigger the workflow:
+  - `input.type` - Always `'state'`
+  - `input.group_id` - The group identifier
+  - `input.item_id` - The item identifier
+  - `input.old_value` - Previous value
+  - `input.new_value` - New value
+</ParamField>
+
+## Use cases
+
+### User lifecycle events
+
+React to user status changes:
+
+```typescript
+import { step, state } from 'motia'
+
+export const config = step({
+  name: 'user-lifecycle',
+  triggers: [
+    state((input) => input.group_id === 'users'),
+  ],
+  enqueues: ['send-email'],
+})
+
+export const handler = async (input, ctx) => {
+  const { item_id, old_value, new_value } = input
+  
+  // New user registration
+  if (!old_value && new_value) {
+    await ctx.enqueue({
+      topic: 'send-email',
+      data: {
+        to: new_value.email,
+        template: 'welcome',
+      },
+    })
+  }
+  
+  // Status change
+  if (old_value?.status !== new_value?.status) {
+    ctx.logger.info('User status changed', {
+      userId: item_id,
+      from: old_value?.status,
+      to: new_value?.status,
+    })
+  }
+}
+```
+
+### Audit trail
+
+Maintain change history:
+
+```typescript
+import { step, state } from 'motia'
+
+export const config = step({
+  name: 'audit-trail',
+  triggers: [state()],
+})
+
+export const handler = async (input, ctx) => {
+  const { group_id, item_id, old_value, new_value } = input
+  
+  // Store audit record
+  await ctx.state.set('audit', `${group_id}_${item_id}_${Date.now()}`, {
+    timestamp: Date.now(),
+    group: group_id,
+    item: item_id,
+    oldValue: old_value,
+    newValue: new_value,
+    traceId: ctx.traceId,
+  })
+}
+```
+
+### Derived state
+
+Compute derived values:
+
+```typescript
+import { step, state } from 'motia'
+
+export const config = step({
+  name: 'update-aggregates',
+  triggers: [
+    state((input) => input.group_id === 'orders'),
+  ],
+})
+
+export const handler = async (input, ctx) => {
+  const { new_value } = input
+  
+  if (!new_value) return
+  
+  // Update customer total
+  const customerId = new_value.customerId
+  const orders = await ctx.state.list('orders')
+  const customerOrders = orders.filter(
+    (o) => o.customerId === customerId
+  )
+  const total = customerOrders.reduce((sum, o) => sum + o.total, 0)
+  
+  await ctx.state.set('customer-totals', customerId, {
+    orderCount: customerOrders.length,
+    total,
+  })
+}
+```
+
+### Cascading updates
+
+Propagate changes:
+
+```typescript
+import { step, state } from 'motia'
+
+export const config = step({
+  name: 'cascade-delete',
+  triggers: [
+    state((input) => {
+      return input.group_id === 'users' && !input.new_value
+    }),
+  ],
+})
+
+export const handler = async (input, ctx) => {
+  const userId = input.item_id
+  
+  // Delete related data
+  const sessions = await ctx.state.list('sessions')
+  for (const session of sessions) {
+    if (session.userId === userId) {
+      await ctx.state.delete('sessions', session.id)
+    }
+  }
+  
+  ctx.logger.info('User data cleaned up', { userId })
+}
+```

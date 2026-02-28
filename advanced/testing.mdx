@@ -1,0 +1,695 @@
+---
+title: Testing
+description: Test Motia applications with unit tests, integration tests, and end-to-end tests
+---
+
+Testing Motia applications involves testing individual step handlers, trigger logic, and the integration between steps. This guide covers testing strategies and best practices.
+
+## Testing strategies
+
+Motia applications can be tested at multiple levels:
+
+1. **Unit tests**: Test individual handler functions in isolation
+2. **Integration tests**: Test steps with the iii engine running
+3. **End-to-end tests**: Test complete workflows across multiple steps
+
+## Unit testing
+
+Test step handlers without starting the iii engine by mocking the flow context:
+
+```typescript
+// steps/create-user.step.ts
+import { http, step } from 'motia'
+import { z } from 'zod'
+
+export const { config, handler } = step(
+  {
+    name: 'CreateUser',
+    triggers: [
+      http('POST', '/users', {
+        bodySchema: z.object({
+          name: z.string(),
+          email: z.string().email(),
+        }),
+      }),
+    ],
+    enqueues: ['user-created'],
+  },
+  async ({ request }, ctx) => {
+    const { name, email } = request.body
+    
+    ctx.logger.info('Creating user', { name, email })
+    
+    const user = {
+      id: crypto.randomUUID(),
+      name,
+      email,
+      createdAt: new Date().toISOString(),
+    }
+    
+    await ctx.state.set('users', user.id, user)
+    
+    await ctx.enqueue({
+      topic: 'user-created',
+      data: { userId: user.id, email },
+    })
+    
+    return { status: 201, body: user }
+  },
+)
+```
+
+### Jest unit test
+
+```typescript
+// steps/create-user.step.test.ts
+import type { FlowContext, MotiaHttpArgs } from 'motia'
+import { handler } from './create-user.step'
+
+describe('CreateUser handler', () => {
+  const mockContext = {
+    enqueue: jest.fn(),
+    traceId: 'test-trace-id',
+    state: {
+      get: jest.fn(),
+      set: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      list: jest.fn(),
+      clear: jest.fn(),
+    },
+    logger: {
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    },
+    streams: {},
+    trigger: { type: 'http' as const, index: 0 },
+    is: {
+      queue: () => false,
+      http: () => true,
+      cron: () => false,
+      state: () => false,
+      stream: () => false,
+    },
+    getData: jest.fn(),
+    match: jest.fn(),
+  } as unknown as FlowContext<any, any>
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('creates a user and enqueues user-created event', async () => {
+    const input: MotiaHttpArgs<{ name: string; email: string }> = {
+      request: {
+        pathParams: {},
+        queryParams: {},
+        body: { name: 'Alice', email: 'alice@example.com' },
+        headers: {},
+        method: 'POST',
+        requestBody: null as any,
+      },
+      response: null as any,
+    }
+
+    const response = await handler(input, mockContext)
+
+    expect(response?.status).toBe(201)
+    expect(response?.body).toMatchObject({
+      name: 'Alice',
+      email: 'alice@example.com',
+    })
+
+    expect(mockContext.state.set).toHaveBeenCalledWith(
+      'users',
+      expect.any(String),
+      expect.objectContaining({
+        name: 'Alice',
+        email: 'alice@example.com',
+      }),
+    )
+
+    expect(mockContext.enqueue).toHaveBeenCalledWith({
+      topic: 'user-created',
+      data: {
+        userId: expect.any(String),
+        email: 'alice@example.com',
+      },
+    })
+  })
+
+  it('validates email format', async () => {
+    const input: MotiaHttpArgs<{ name: string; email: string }> = {
+      request: {
+        pathParams: {},
+        queryParams: {},
+        body: { name: 'Alice', email: 'invalid-email' },
+        headers: {},
+        method: 'POST',
+        requestBody: null as any,
+      },
+      response: null as any,
+    }
+
+    // This would be caught by schema validation in the real app
+    // In unit tests, you might test validation separately
+    await expect(handler(input, mockContext)).resolves.toBeDefined()
+  })
+})
+```
+
+### Vitest unit test
+
+```typescript
+// steps/create-user.step.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { FlowContext, MotiaHttpArgs } from 'motia'
+import { handler } from './create-user.step'
+
+describe('CreateUser handler', () => {
+  const mockContext = {
+    enqueue: vi.fn(),
+    traceId: 'test-trace-id',
+    state: {
+      get: vi.fn(),
+      set: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      list: vi.fn(),
+      clear: vi.fn(),
+    },
+    logger: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
+    streams: {},
+    trigger: { type: 'http' as const, index: 0 },
+    is: {
+      queue: () => false,
+      http: () => true,
+      cron: () => false,
+      state: () => false,
+      stream: () => false,
+    },
+    getData: vi.fn(),
+    match: vi.fn(),
+  } as unknown as FlowContext<any, any>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('creates a user and enqueues user-created event', async () => {
+    const input: MotiaHttpArgs<{ name: string; email: string }> = {
+      request: {
+        pathParams: {},
+        queryParams: {},
+        body: { name: 'Alice', email: 'alice@example.com' },
+        headers: {},
+        method: 'POST',
+        requestBody: null as any,
+      },
+      response: null as any,
+    }
+
+    const response = await handler(input, mockContext)
+
+    expect(response?.status).toBe(201)
+    expect(response?.body).toMatchObject({
+      name: 'Alice',
+      email: 'alice@example.com',
+    })
+
+    expect(mockContext.state.set).toHaveBeenCalledWith(
+      'users',
+      expect.any(String),
+      expect.objectContaining({
+        name: 'Alice',
+        email: 'alice@example.com',
+      }),
+    )
+
+    expect(mockContext.enqueue).toHaveBeenCalledWith({
+      topic: 'user-created',
+      data: {
+        userId: expect.any(String),
+        email: 'alice@example.com',
+      },
+    })
+  })
+})
+```
+
+## Integration testing
+
+Integration tests run your steps with the iii engine:
+
+```typescript
+// __tests__/integration/create-user.integration.test.ts
+import { getInstance, initIII } from 'motia'
+import { beforeAll, afterAll, it, expect, describe } from 'vitest'
+
+const TEST_API_URL = 'http://localhost:3111'
+
+describe('CreateUser integration', () => {
+  beforeAll(async () => {
+    // Initialize iii engine
+    initIII({ enabled: true })
+    const sdk = getInstance()
+    
+    // Wait for engine to be ready
+    await waitForReady(sdk)
+  }, 15000)
+
+  afterAll(async () => {
+    const sdk = getInstance()
+    await sdk.shutdown()
+  })
+
+  it('creates a user via HTTP POST', async () => {
+    const response = await fetch(`${TEST_API_URL}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Alice',
+        email: 'alice@example.com',
+      }),
+    })
+
+    expect(response.status).toBe(201)
+
+    const user = await response.json()
+    expect(user).toMatchObject({
+      name: 'Alice',
+      email: 'alice@example.com',
+      id: expect.any(String),
+    })
+  })
+
+  it('validates required fields', async () => {
+    const response = await fetch(`${TEST_API_URL}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Alice',
+        // Missing email
+      }),
+    })
+
+    expect(response.status).toBe(400)
+  })
+})
+
+function waitForReady(sdk: any): Promise<void> {
+  return new Promise((resolve) => {
+    const check = setInterval(() => {
+      if (sdk.isReady()) {
+        clearInterval(check)
+        resolve()
+      }
+    }, 100)
+  })
+}
+```
+
+### Test setup
+
+Create a test configuration file:
+
+```yaml
+# config-test.yaml
+port: 49199
+modules:
+  - class: modules::stream::StreamModule
+    config:
+      port: 3112
+      host: 0.0.0.0
+      adapter:
+        class: modules::stream::adapters::KvStore
+        config:
+          store_method: in_memory
+
+  - class: modules::state::StateModule
+    config:
+      adapter:
+        class: modules::state::adapters::KvStore
+        config:
+          store_method: in_memory
+
+  - class: modules::api::RestApiModule
+    config:
+      host: 0.0.0.0
+      port: 3199
+      default_timeout: 30000
+
+  - class: modules::queue::QueueModule
+    config:
+      adapter:
+        class: modules::queue::BuiltinQueueAdapter
+        config:
+          mode: concurrent
+          max_attempts: 3
+
+  - class: modules::observability::OtelModule
+    config:
+      enabled: true
+      exporter: memory
+      sampling_ratio: 1.0
+```
+
+Start the engine with the test config:
+
+```bash
+iii --config config-test.yaml
+```
+
+## End-to-end testing
+
+E2E tests cover complete workflows:
+
+```typescript
+// __tests__/e2e/user-workflow.e2e.test.ts
+import { test, expect } from '@playwright/test'
+
+const API_URL = 'http://localhost:3111'
+
+test('complete user registration flow', async ({ request }) => {
+  // 1. Create user
+  const createResponse = await request.post(`${API_URL}/users`, {
+    data: {
+      name: 'Alice',
+      email: 'alice@example.com',
+    },
+  })
+
+  expect(createResponse.status()).toBe(201)
+  const user = await createResponse.json()
+  expect(user.id).toBeDefined()
+
+  // 2. Wait for user-created event to be processed
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+
+  // 3. Verify user appears in list
+  const listResponse = await request.get(`${API_URL}/users`)
+  expect(listResponse.status()).toBe(200)
+
+  const users = await listResponse.json()
+  expect(users).toContainEqual(
+    expect.objectContaining({
+      id: user.id,
+      name: 'Alice',
+      email: 'alice@example.com',
+    }),
+  )
+
+  // 4. Update user
+  const updateResponse = await request.put(`${API_URL}/users/${user.id}`, {
+    data: { name: 'Alice Smith' },
+  })
+  expect(updateResponse.status()).toBe(200)
+
+  // 5. Delete user
+  const deleteResponse = await request.delete(`${API_URL}/users/${user.id}`)
+  expect(deleteResponse.status()).toBe(204)
+})
+```
+
+Run E2E tests:
+
+```bash
+pnpm exec playwright test
+```
+
+## Testing queue triggers
+
+Test steps that consume queue messages:
+
+```typescript
+import { getInstance } from 'motia'
+
+it('processes order-created queue message', async () => {
+  const sdk = getInstance()
+  
+  // Enqueue a message
+  await sdk.call('enqueue', {
+    topic: 'order-created',
+    data: {
+      orderId: 'order-123',
+      userId: 'user-456',
+      total: 99.99,
+    },
+  })
+  
+  // Wait for processing
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  
+  // Verify side effects (e.g., state changes)
+  const order = await sdk.call('state.get', {
+    groupId: 'orders',
+    key: 'order-123',
+  })
+  
+  expect(order).toMatchObject({
+    status: 'processing',
+    userId: 'user-456',
+  })
+})
+```
+
+## Testing cron triggers
+
+Test scheduled tasks by triggering them manually:
+
+```typescript
+import { getInstance } from 'motia'
+
+it('runs scheduled cleanup job', async () => {
+  const sdk = getInstance()
+  
+  // Manually trigger the cron job
+  const functionId = 'steps::CleanupOldOrders::trigger::cron(0 0 * * * * *)'
+  await sdk.invokeFunction(functionId, undefined)
+  
+  // Verify cleanup occurred
+  const orders = await sdk.call('state.list', { groupId: 'orders' })
+  expect(orders.every((o: any) => o.createdAt > Date.now() - 30 * 24 * 60 * 60 * 1000)).toBe(true)
+})
+```
+
+## Testing middleware
+
+Test middleware in isolation:
+
+```typescript
+import type { ApiMiddleware, ApiResponse } from 'motia'
+import { authMiddleware } from './middleware/auth'
+
+it('returns 401 for missing auth token', async () => {
+  const mockNext = jest.fn()
+  const mockContext = createMockContext()
+  
+  const input = {
+    request: {
+      headers: {},
+      pathParams: {},
+      queryParams: {},
+      body: {},
+      method: 'GET',
+      requestBody: null as any,
+    },
+    response: null as any,
+  }
+  
+  const response = await authMiddleware(input, mockContext, mockNext)
+  
+  expect(response?.status).toBe(401)
+  expect(mockNext).not.toHaveBeenCalled()
+})
+
+it('calls next() with valid token', async () => {
+  const mockNext = jest.fn().mockResolvedValue({ status: 200, body: {} })
+  const mockContext = createMockContext()
+  
+  const input = {
+    request: {
+      headers: { authorization: 'Bearer valid-token' },
+      pathParams: {},
+      queryParams: {},
+      body: {},
+      method: 'GET',
+      requestBody: null as any,
+    },
+    response: null as any,
+  }
+  
+  const response = await authMiddleware(input, mockContext, mockNext)
+  
+  expect(mockNext).toHaveBeenCalled()
+  expect(response?.status).toBe(200)
+})
+```
+
+## Test helpers
+
+Create reusable test utilities:
+
+```typescript
+// __tests__/helpers.ts
+import type { FlowContext } from 'motia'
+
+export function createMockContext(overrides = {}): FlowContext<any, any> {
+  return {
+    enqueue: jest.fn(),
+    traceId: 'test-trace-id',
+    state: {
+      get: jest.fn(),
+      set: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      list: jest.fn(),
+      clear: jest.fn(),
+    },
+    logger: {
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    },
+    streams: {},
+    trigger: { type: 'http' as const, index: 0 },
+    is: {
+      queue: () => false,
+      http: () => true,
+      cron: () => false,
+      state: () => false,
+      stream: () => false,
+    },
+    getData: jest.fn(),
+    match: jest.fn(),
+    ...overrides,
+  } as unknown as FlowContext<any, any>
+}
+
+export async function waitForQueueProcessing(ms = 500) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export async function clearTestState(sdk: any) {
+  const groups = ['users', 'orders', 'products']
+  for (const group of groups) {
+    await sdk.call('state.clear', { groupId: group })
+  }
+}
+```
+
+## Best practices
+
+### 1. Test behavior, not implementation
+
+Focus on what the step does, not how it does it:
+
+```typescript
+// ✅ Good
+expect(response?.status).toBe(201)
+expect(response?.body).toMatchObject({ name: 'Alice' })
+
+// ❌ Bad (testing internal implementation)
+expect(mockContext.state.set).toHaveBeenCalledTimes(1)
+```
+
+### 2. Use descriptive test names
+
+```typescript
+// ✅ Good
+it('returns 401 when authorization header is missing', async () => { })
+
+// ❌ Bad
+it('test auth', async () => { })
+```
+
+### 3. Isolate tests
+
+Each test should be independent:
+
+```typescript
+beforeEach(async () => {
+  await clearTestState(sdk)
+  jest.clearAllMocks()
+})
+```
+
+### 4. Test error cases
+
+```typescript
+it('returns 400 for invalid email format', async () => { })
+it('returns 404 when user not found', async () => { })
+it('returns 500 when database is unavailable', async () => { })
+```
+
+### 5. Use factories for test data
+
+```typescript
+// __tests__/factories.ts
+export function createUser(overrides = {}) {
+  return {
+    id: crypto.randomUUID(),
+    name: 'Test User',
+    email: 'test@example.com',
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  }
+}
+
+// In tests
+const user = createUser({ name: 'Alice' })
+```
+
+## CI/CD integration
+
+Run tests in GitHub Actions:
+
+```yaml
+# .github/workflows/test.yml
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run unit tests
+        run: npm run test:unit
+      
+      - name: Install iii engine
+        run: curl -fsSL https://iii.dev/install.sh | sh
+      
+      - name: Run integration tests
+        run: npm run test:integration
+      
+      - name: Run E2E tests
+        run: npx playwright test
+```
+
+## Next steps
+
+- Configure [observability](/advanced/observability) for production monitoring
+- Implement [deployment](/advanced/deployment) automation
+- Learn about [middleware](/advanced/middleware) for cross-cutting concerns

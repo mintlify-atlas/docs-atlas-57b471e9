@@ -1,0 +1,334 @@
+---
+title: Steps
+description: The core primitive for defining workflow units in Motia
+---
+
+Steps are the fundamental building blocks in Motia. Each step represents a unit of work that can be triggered by various events, execute business logic, and interact with other steps through queues.
+
+## What is a step?
+
+A step consists of two parts:
+- **Configuration**: Defines the step's name, triggers, and output queues
+- **Handler**: The async function that executes when the step is triggered
+
+## Creating a step
+
+Motia provides two syntaxes for defining steps:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+
+    // Inline syntax
+    export default step({
+      name: 'process-order',
+      triggers: [http('POST', '/orders')],
+      enqueues: ['order-confirmation']
+    }, async (input, ctx) => {
+      // Handler logic
+      return { status: 200, body: { success: true } }
+    })
+
+    // Builder syntax
+    export default step({
+      name: 'process-order',
+      triggers: [http('POST', '/orders')],
+      enqueues: ['order-confirmation']
+    })
+    .handle(async (input, ctx) => {
+      return { status: 200, body: { success: true } }
+    })
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```javascript
+    import { step, http } from 'motia'
+
+    // Inline syntax
+    export default step({
+      name: 'process-order',
+      triggers: [http('POST', '/orders')],
+      enqueues: ['order-confirmation']
+    }, async (input, ctx) => {
+      // Handler logic
+      return { status: 200, body: { success: true } }
+    })
+
+    // Builder syntax
+    export default step({
+      name: 'process-order',
+      triggers: [http('POST', '/orders')],
+      enqueues: ['order-confirmation']
+    })
+    .handle(async (input, ctx) => {
+      return { status: 200, body: { success: true } }
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    # Inline syntax
+    default = step({
+        'name': 'process-order',
+        'triggers': [http('POST', '/orders')],
+        'enqueues': ['order-confirmation']
+    }, async def handler(input, ctx):
+        # Handler logic
+        return {'status': 200, 'body': {'success': True}}
+    )
+
+    # Builder syntax
+    default = step({
+        'name': 'process-order',
+        'triggers': [http('POST', '/orders')],
+        'enqueues': ['order-confirmation']
+    }).handle(async def handler(input, ctx):
+        return {'status': 200, 'body': {'success': True}}
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Step configuration
+
+The step configuration object defines the step's behavior and connections:
+
+### Required fields
+
+<ParamField path="name" type="string" required>
+  Unique identifier for the step
+</ParamField>
+
+<ParamField path="triggers" type="TriggerConfig[]" required>
+  Array of triggers that can invoke this step. See [Triggers](/concepts/triggers) for details.
+</ParamField>
+
+### Optional fields
+
+<ParamField path="description" type="string">
+  Human-readable description of what the step does
+</ParamField>
+
+<ParamField path="enqueues" type="string[]">
+  Queue topics this step can publish to. Use with `ctx.enqueue()`
+</ParamField>
+
+<ParamField path="flows" type="string[]">
+  Flow names this step belongs to, for logical grouping
+</ParamField>
+
+<ParamField path="includeFiles" type="string[]">
+  Additional files to bundle with the step deployment
+</ParamField>
+
+<ParamField path="infrastructure" type="InfrastructureConfig">
+  Configure handler resources and queue behavior:
+  - `handler.ram`: Memory in MB (default: 128)
+  - `handler.cpu`: CPU units (optional)
+  - `handler.timeout`: Timeout in seconds (default: 30)
+  - `queue.type`: "fifo" or "standard" (default: "standard")
+  - `queue.maxRetries`: Retry attempts (default: 3)
+  - `queue.visibilityTimeout`: Visibility timeout in seconds (default: 30)
+</ParamField>
+
+## Step handler signature
+
+Handlers receive two parameters:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    type StepHandler<TInput, TEnqueueData> = (
+      input: TriggerInput<TInput>,
+      ctx: FlowContext<TEnqueueData, TriggerInput<TInput>>
+    ) => Promise<ApiResponse | void>
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from typing import Awaitable, Callable, Any
+
+    StepHandler = Callable[[Any, FlowContext], Awaitable[Any]]
+    ```
+  </Tab>
+</Tabs>
+
+### Input parameter
+
+The input type depends on the trigger:
+- **HTTP triggers**: `MotiaHttpArgs` with request/response objects
+- **Queue triggers**: The queue message data
+- **Cron triggers**: `undefined` (no input)
+- **State triggers**: `StateTriggerInput` with old/new values
+- **Stream triggers**: `StreamTriggerInput` with event data
+
+### Context parameter
+
+The `ctx` parameter provides access to Motia's runtime features. See [FlowContext](/concepts/context) for full details.
+
+## Multi-trigger steps
+
+Steps can respond to multiple trigger types:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http, queue, cron } from 'motia'
+    import { z } from 'zod'
+
+    const schema = z.object({
+      orderId: z.string(),
+      status: z.string()
+    })
+
+    export default step({
+      name: 'update-order',
+      triggers: [
+        http('POST', '/orders/:id', { bodySchema: schema }),
+        queue('order-updates', { input: schema }),
+        cron('0 * * * *') // Hourly check
+      ]
+    }, async (input, ctx) => {
+      return ctx.match({
+        http: async (req) => {
+          const data = req.request.body
+          await updateOrder(data)
+          return { status: 200, body: { updated: true } }
+        },
+        queue: async (data) => {
+          await updateOrder(data)
+        },
+        cron: async () => {
+          await checkPendingOrders()
+        }
+      })
+    })
+
+    async function updateOrder(data: z.infer<typeof schema>) {
+      // Shared logic for HTTP and queue
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http, queue, cron
+
+    default = step({
+        'name': 'update-order',
+        'triggers': [
+            http('POST', '/orders/{id}'),
+            queue('order-updates'),
+            cron('0 * * * *')  # Hourly check
+        ]
+    }, async def handler(input, ctx):
+        return await ctx.match({
+            'http': lambda req: update_via_http(req),
+            'queue': lambda data: update_via_queue(data),
+            'cron': lambda: check_pending_orders()
+        })
+    )
+
+    async def update_via_http(req):
+        data = req.request.body
+        await update_order(data)
+        return {'status': 200, 'body': {'updated': True}}
+
+    async def update_via_queue(data):
+        await update_order(data)
+
+    async def check_pending_orders():
+        # Periodic check logic
+        pass
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Use `ctx.match()` to handle different trigger types with type-safe branching. See [Handler patterns](/concepts/handlers#pattern-matching) for more details.
+</Tip>
+
+## Type inference
+
+Motia automatically infers types from your configuration:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http, queue } from 'motia'
+    import { z } from 'zod'
+
+    const orderSchema = z.object({
+      id: z.string(),
+      amount: z.number()
+    })
+
+    export default step({
+      name: 'process-payment',
+      triggers: [
+        http('POST', '/payments', { bodySchema: orderSchema }),
+        queue('payment-queue', { input: orderSchema })
+      ],
+      enqueues: ['payment-confirmed']
+    }, async (input, ctx) => {
+      // input is typed as: MotiaHttpArgs<Order> | Order
+      // ctx.enqueue is typed to accept: { topic: 'payment-confirmed', data: unknown }
+      
+      const data = ctx.getData() // Extracts Order from both trigger types
+      
+      await ctx.enqueue({
+        topic: 'payment-confirmed',
+        data: { orderId: data.id, success: true }
+      })
+    })
+    ```
+  </Tab>
+</Tabs>
+
+## Step lifecycle
+
+1. **Trigger fires**: HTTP request, queue message, cron schedule, state change, or stream event
+2. **Input validation**: Schema validation if defined in trigger config
+3. **Handler execution**: Your async handler function runs
+4. **Response handling**: 
+   - HTTP: Return `ApiResponse` object
+   - Queue/Cron: Return nothing or throw error for retry
+   - State/Stream: Return any value
+5. **Error handling**: Errors trigger retries based on infrastructure config
+
+## Best practices
+
+<Card title="Single responsibility" icon="check">
+  Keep each step focused on one task. Use multiple steps connected by queues for complex workflows.
+</Card>
+
+<Card title="Idempotency" icon="rotate">
+  Design handlers to be safely retryable. Use idempotency keys for external API calls.
+</Card>
+
+<Card title="Type safety" icon="shield">
+  Define schemas for inputs and outputs to catch errors at build time.
+</Card>
+
+<Card title="Error handling" icon="triangle-exclamation">
+  Let transient errors throw for automatic retry. Handle permanent failures explicitly.
+</Card>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Triggers" icon="bolt" href="/concepts/triggers">
+    Learn about the five trigger types
+  </Card>
+  <Card title="Context API" icon="layer-group" href="/concepts/context">
+    Explore FlowContext capabilities
+  </Card>
+  <Card title="Handlers" icon="code" href="/concepts/handlers">
+    Handler patterns and best practices
+  </Card>
+  <Card title="State management" icon="database" href="/concepts/state-management">
+    Working with persistent state
+  </Card>
+</CardGroup>

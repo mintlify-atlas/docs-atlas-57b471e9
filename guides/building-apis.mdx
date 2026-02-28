@@ -1,0 +1,366 @@
+---
+title: Building REST APIs
+description: Learn how to build production-ready REST APIs with HTTP triggers, request validation, and response schemas
+---
+
+Motia makes building REST APIs simple with HTTP triggers. Every API endpoint is a Step with automatic request validation, type-safe responses, and built-in observability.
+
+## Creating your first API endpoint
+
+Create an API endpoint by defining a Step with an HTTP trigger:
+
+<CodeGroup>
+
+```typescript TypeScript
+// steps/hello-api.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+
+export const config = {
+  name: 'HelloAPI',
+  description: 'Receives hello request and enqueues event for processing',
+  triggers: [
+    {
+      type: 'http',
+      path: '/hello',
+      method: 'GET',
+      responseSchema: {
+        200: z.object({
+          message: z.string(),
+          status: z.string(),
+          appName: z.string(),
+        }),
+      },
+    },
+  ],
+  enqueues: ['process-greeting'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (_, { enqueue, logger }) => {
+  const appName = 'III App'
+  const timestamp = new Date().toISOString()
+
+  logger.info('Hello API endpoint called', { appName, timestamp })
+
+  await enqueue({
+    topic: 'process-greeting',
+    data: {
+      timestamp,
+      appName,
+      greetingPrefix: process.env.GREETING_PREFIX || 'Hello',
+      requestId: Math.random().toString(36).substring(7),
+    },
+  })
+
+  return {
+    status: 200,
+    body: {
+      message: 'Hello request received! Check logs for processing.',
+      status: 'processing',
+      appName,
+    },
+  }
+}
+```
+
+```python Python
+# steps/greet_step.py
+from typing import Any
+from motia import ApiRequest, ApiResponse, FlowContext, http
+
+config = {
+    "name": "Greet",
+    "description": "Greet and store the greeting in a stream",
+    "triggers": [
+        http("GET", "/greet"),
+    ],
+    "enqueues": [],
+}
+
+async def handler(request: ApiRequest[Any], ctx: FlowContext[Any]) -> ApiResponse[dict[str, Any]]:
+    """Handle greeting requests."""
+    name = request.query_params.get("name", ["world"])[0]
+    greeting = {"name": name, "message": f"Hello, {name}!"}
+    
+    ctx.logger.info("Greeting stored", {"name": name})
+    
+    return ApiResponse(status=200, body=greeting)
+```
+
+</CodeGroup>
+
+## Building a REST API with validation
+
+Here's a complete example building a pet store API with request validation and multiple endpoints:
+
+<Steps>
+
+<Step title="Define your data schemas">
+
+Create type-safe schemas for your API:
+
+```typescript
+// services/types.ts
+import { z } from 'zod'
+
+export const petSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  photoUrl: z.string(),
+})
+
+export const orderSchema = z.object({
+  id: z.string(),
+  quantity: z.number(),
+  petId: z.string(),
+  shipDate: z.string(),
+  status: z.enum(['placed', 'approved', 'delivered']),
+  complete: z.boolean(),
+})
+
+export type Pet = z.infer<typeof petSchema>
+export type Order = z.infer<typeof orderSchema>
+```
+
+</Step>
+
+<Step title="Create the API endpoint">
+
+Define an HTTP trigger with body validation:
+
+```typescript
+// steps/api.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import { petStoreService } from './services/pet-store'
+import { petSchema } from './services/types'
+
+export const config = {
+  name: 'ApiTrigger',
+  description: 'Create a pet and optionally order food',
+  flows: ['pet-store'],
+  triggers: [
+    {
+      type: 'http',
+      method: 'POST',
+      path: '/pets',
+      bodySchema: z.object({
+        pet: z.object({
+          name: z.string(),
+          photoUrl: z.string(),
+        }),
+        foodOrder: z
+          .object({
+            quantity: z.number(),
+          })
+          .optional(),
+      }),
+      responseSchema: {
+        200: petSchema,
+      },
+    },
+  ],
+  enqueues: ['process-food-order'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (request, { logger, traceId, enqueue }) => {
+  logger.info('Processing API Step', { body: request.body })
+
+  const { pet, foodOrder } = request.body || {}
+  const newPetRecord = await petStoreService.createPet(pet)
+
+  if (foodOrder) {
+    await enqueue({
+      topic: 'process-food-order',
+      data: {
+        quantity: foodOrder.quantity,
+        email: 'customer@example.com',
+        petId: newPetRecord.id,
+      },
+    })
+  }
+
+  return { status: 200, body: { ...newPetRecord, traceId } }
+}
+```
+
+</Step>
+
+<Step title="Test your API">
+
+Start your Motia app and test the endpoint:
+
+```bash
+curl -X POST http://localhost:8787/pets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pet": {
+      "name": "Fluffy",
+      "photoUrl": "https://example.com/fluffy.jpg"
+    },
+    "foodOrder": {
+      "quantity": 2
+    }
+  }'
+```
+
+</Step>
+
+</Steps>
+
+## Handling different HTTP methods
+
+Create CRUD endpoints with different HTTP methods:
+
+```typescript
+export const config = {
+  name: 'TodoAPI',
+  triggers: [
+    {
+      type: 'http',
+      method: 'POST',
+      path: '/todos',
+      bodySchema: z.object({ description: z.string() }),
+    },
+    {
+      type: 'http',
+      method: 'GET',
+      path: '/todos/:id',
+    },
+    {
+      type: 'http',
+      method: 'PUT',
+      path: '/todos/:id',
+      bodySchema: z.object({ description: z.string().optional(), completed: z.boolean().optional() }),
+    },
+    {
+      type: 'http',
+      method: 'DELETE',
+      path: '/todos/:id',
+    },
+  ],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (_, ctx) => {
+  return ctx.match({
+    http: async ({ request }) => {
+      const { method, params } = request
+      
+      switch (method) {
+        case 'POST':
+          // Create todo
+          const newTodo = await ctx.state.set('todos', generateId(), request.body)
+          return { status: 201, body: newTodo }
+          
+        case 'GET':
+          // Get todo
+          const todo = await ctx.state.get('todos', params.id)
+          return todo ? { status: 200, body: todo } : { status: 404 }
+          
+        case 'PUT':
+          // Update todo
+          const updated = await ctx.state.set('todos', params.id, request.body)
+          return { status: 200, body: updated }
+          
+        case 'DELETE':
+          // Delete todo
+          await ctx.state.delete('todos', params.id)
+          return { status: 204 }
+      }
+    },
+  })
+}
+```
+
+## Response schemas and validation
+
+Define multiple response schemas for different status codes:
+
+```typescript
+export const config = {
+  name: 'CreateTodo',
+  triggers: [
+    http('POST', '/todos', {
+      bodySchema: z.object({ 
+        description: z.string(),
+        dueDate: z.string().optional() 
+      }),
+      responseSchema: {
+        200: z.object({
+          id: z.string(),
+          description: z.string(),
+          createdAt: z.string(),
+        }),
+        400: z.object({ error: z.string() }),
+        500: z.object({ error: z.string() }),
+      },
+    }),
+  ],
+} as const satisfies StepConfig
+```
+
+## Query parameters and path params
+
+Access query parameters and path parameters from the request:
+
+```typescript
+export const handler: Handlers<typeof config> = async ({ request }, { logger }) => {
+  // Path parameters
+  const userId = request.params.id
+  
+  // Query parameters
+  const page = request.query.page || '1'
+  const limit = request.query.limit || '10'
+  
+  logger.info('Fetching user data', { userId, page, limit })
+  
+  return {
+    status: 200,
+    body: {
+      userId,
+      page: parseInt(page),
+      limit: parseInt(limit),
+    },
+  }
+}
+```
+
+## Error handling
+
+Handle errors gracefully with proper HTTP status codes:
+
+```typescript
+export const handler: Handlers<typeof config> = async ({ request }, { logger, state }) => {
+  try {
+    const { description } = request.body
+    
+    if (!description) {
+      return { status: 400, body: { error: 'Description is required' } }
+    }
+    
+    const todo = await state.set('todos', generateId(), { description })
+    return { status: 200, body: todo }
+    
+  } catch (error) {
+    logger.error('Failed to create todo', { error })
+    return { status: 500, body: { error: 'Internal server error' } }
+  }
+}
+```
+
+## Related concepts
+
+<CardGroup cols={2}>
+  <Card title="HTTP triggers" icon="globe" href="/triggers/http">
+    Learn about HTTP trigger configuration
+  </Card>
+  <Card title="Context API" icon="code" href="/concepts/context">
+    Access request data and context
+  </Card>
+  <Card title="Background jobs" icon="clock" href="/guides/background-jobs">
+    Process work asynchronously
+  </Card>
+  <Card title="State management" icon="database" href="/concepts/state-management">
+    Store and retrieve data
+  </Card>
+</CardGroup>

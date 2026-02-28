@@ -1,0 +1,136 @@
+---
+title: Introduction to Motia
+description: Build production-grade backends with a single primitive that unifies APIs, background jobs, workflows, streams, and AI agents.
+---
+
+# Build production-grade backends with a single primitive
+
+Backend development today is fragmented. APIs live in one framework, background jobs in another, queues and schedulers elsewhere, and now AI agents and streaming systems have their own runtimes. Add observability and state management on top, and you're stitching together half a dozen tools before writing your first feature.
+
+**Motia unifies all of these concerns around one core primitive: the Step.**
+
+Just as React made frontend development simple by introducing components, Motia redefines backend development with Steps - a single primitive that handles everything.
+
+## What is a Step?
+
+A Step is just a file with a `config` and a `handler`. Motia auto-discovers these files and connects them automatically.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```ts steps/send-message.step.ts
+    export const config = {
+      name: 'SendMessage',
+      triggers: [
+        {
+          type: 'http',
+          method: 'POST',
+          path: '/messages',
+        }
+      ],
+      enqueues: ['message.sent']
+    };
+
+    export const handler = async (req, { enqueue }) => {
+      await enqueue({
+        topic: 'message.sent',
+        data: { text: req.body.text }
+      });
+      return { status: 200, body: { ok: true } };
+    };
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python steps/send_message_step.py
+    config = {
+        "name": "SendMessage",
+        "triggers": [
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/messages",
+            }
+        ],
+        "enqueues": ["message.sent"],
+    }
+
+    async def handler(req, ctx):
+        await ctx.enqueue({
+            "topic": "message.sent",
+            "data": {"text": req.body.get("text")},
+        })
+        return {"status": 200, "body": {"ok": True}}
+    ```
+  </Tab>
+</Tabs>
+
+With just two files, you've built an **API endpoint**, a **queue**, and a **worker**. No extra frameworks required.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Unified primitive" icon="cube" href="/concepts/steps">
+    One primitive for APIs, queues, cron, state, and streams
+  </Card>
+  <Card title="Multi-language" icon="code" href="/guides/multi-language">
+    TypeScript, JavaScript, and Python support
+  </Card>
+  <Card title="Type-safe" icon="shield-check" href="/api/typescript/types">
+    Full TypeScript support with automatic type inference
+  </Card>
+  <Card title="Real-time streaming" icon="signal-stream" href="/concepts/streams">
+    Built-in WebSocket streaming with state management
+  </Card>
+  <Card title="AI-ready" icon="robot" href="/guides/ai-agents">
+    Perfect for building AI agents and workflows
+  </Card>
+  <Card title="Built-in observability" icon="chart-line" href="/advanced/observability">
+    OpenTelemetry tracing and structured logging
+  </Card>
+</CardGroup>
+
+## Trigger types
+
+Motia supports five trigger types, all using the same Step primitive:
+
+| Trigger | When it runs | Use case |
+|---------|--------------|----------|
+| **HTTP** | HTTP request | REST APIs, webhooks |
+| **Queue** | Message received | Background jobs, event processing |
+| **Cron** | Scheduled time | Recurring tasks, cleanup jobs |
+| **State** | State change | Reactive workflows, audit trails |
+| **Stream** | Stream event | Real-time updates, notifications |
+
+## Powered by the iii engine
+
+Motia is powered by the [iii engine](https://iii.dev), a Rust-based runtime that manages queues, state, streams, cron, and observability through a single configuration file.
+
+<Note>
+The iii engine handles all infrastructure concerns, allowing you to focus on writing Steps.
+</Note>
+
+## Language support
+
+| Language | Status |
+|----------|--------|
+| **JavaScript** | ✅ Stable |
+| **TypeScript** | ✅ Stable |
+| **Python** | ✅ Stable |
+| **Ruby** | 🚧 Beta |
+| **Go** | 🔄 Soon |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first Motia app in under 60 seconds
+  </Card>
+  <Card title="Core concepts" icon="book" href="/concepts/steps">
+    Learn about Steps, triggers, and handlers
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/hello-world">
+    Explore real-world examples and patterns
+  </Card>
+  <Card title="API reference" icon="brackets-curly" href="/api/typescript/step">
+    Dive into the complete API documentation
+  </Card>
+</CardGroup>

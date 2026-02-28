@@ -1,0 +1,393 @@
+---
+title: Development commands
+description: Build and run your Motia project in development mode with type generation and file watching
+---
+
+Development commands help you build, run, and iterate on your Motia project locally with automatic type generation and optional file watching.
+
+## motia dev (JavaScript/TypeScript)
+
+Builds your project in development mode with full type generation support.
+
+### Usage
+
+```bash
+motia dev
+```
+
+### What it does
+
+1. **Generates TypeScript types** - Automatically creates `types.d.ts` from your steps and streams
+2. **Bundles your code** - Uses esbuild to create `dist/index-dev.js`
+3. **Preserves external packages** - All dependencies remain external for faster rebuilds
+4. **Includes source maps** - Full debugging support in development
+
+### Output
+
+```bash
+$ motia dev
+
+Generating types...
+✓ types.d.ts created
+
+Building for development...
+✓ dist/index-dev.js [42.5 KB]
+
+Done in 234ms
+```
+
+### Configuration
+
+The dev command automatically:
+- Sets platform to `node`
+- Targets Node.js 22+
+- Uses ESM format
+- Bundles code with source maps
+- Keeps all npm packages external
+
+### Running the built output
+
+After building, run your project with the iii engine:
+
+```bash
+iii -c iii-config.yaml
+```
+
+The iii engine will load the development build and start your steps.
+
+## motia typegen (JavaScript/TypeScript)
+
+Generates TypeScript type definitions from your steps and streams.
+
+### Usage
+
+```bash
+motia typegen [options]
+```
+
+### Options
+
+| Option | Alias | Description | Default |
+|--------|-------|-------------|--------|
+| `--output <path>` | `-o` | Output file path | `types.d.ts` |
+| `--watch` | `-w` | Watch for file changes | `false` |
+
+### Examples
+
+#### Basic type generation
+
+```bash
+motia typegen
+```
+
+Output:
+```bash
+✓ types.d.ts created
+```
+
+#### Custom output path
+
+```bash
+motia typegen --output src/generated/types.d.ts
+```
+
+#### Watch mode
+
+```bash
+motia typegen --watch
+```
+
+Output:
+```bash
+✓ types.d.ts created
+Watching for changes...
+
+[File changed: steps/new-step.step.ts]
+✓ types.d.ts updated
+```
+
+### Generated types structure
+
+The typegen command analyzes your steps and streams to generate:
+
+```typescript
+// types.d.ts
+declare module 'motia' {
+  export interface StepContext {
+    enqueue: (data: EnqueueData) => Promise<void>
+    logger: Logger
+  }
+
+  export interface EnqueueData {
+    topic: 'message.sent' | 'user.created'
+    data: any
+  }
+}
+```
+
+## motia run (Python)
+
+Discovers and runs Python steps and streams.
+
+### Usage
+
+```bash
+motia run [options]
+```
+
+### Options
+
+| Option | Alias | Description | Default |
+|--------|-------|-------------|--------|
+| `--dir <directory>` | `-d` | Directory containing step files | `steps` |
+| `--verbose` | `-v` | Enable verbose logging | `false` |
+
+### Examples
+
+#### Basic run
+
+```bash
+motia run
+```
+
+Output:
+```bash
+2026-02-28 10:30:15 [INFO] motia.cli: Found 3 step(s) and 1 stream(s)
+2026-02-28 10:30:15 [DEBUG] motia.cli: Loading step: steps/send_message_step.py
+2026-02-28 10:30:15 [DEBUG] motia.cli: Loading step: steps/process_message_step.py
+2026-02-28 10:30:15 [INFO] motia.cli: All steps loaded. Connecting...
+2026-02-28 10:30:16 [INFO] motia.cli: Connected. Waiting for events...
+```
+
+#### Custom directory
+
+```bash
+motia run --dir src/steps
+```
+
+#### Verbose logging
+
+```bash
+motia run --verbose
+```
+
+Output:
+```bash
+2026-02-28 10:30:15 [DEBUG] motia.cli: Discovering steps in: steps
+2026-02-28 10:30:15 [DEBUG] motia.cli: Found step file: steps/example_step.py
+2026-02-28 10:30:15 [DEBUG] motia.cli: Loading module from: steps/example_step.py
+2026-02-28 10:30:15 [DEBUG] motia.cli: Registered step: ExampleStep
+2026-02-28 10:30:15 [INFO] motia.cli: All steps loaded. Connecting...
+```
+
+### Step discovery
+
+The `run` command automatically discovers:
+- All `*_step.py` files in the specified directory
+- All `*_stream.py` files for streaming configuration
+- Includes `src/` directory if it exists
+
+## motia dev (Python)
+
+Runs Python steps in development mode with optional file watching.
+
+### Usage
+
+```bash
+motia dev [options]
+```
+
+### Options
+
+| Option | Alias | Description | Default |
+|--------|-------|-------------|--------|
+| `--dir <directory>` | `-d` | Directory containing step files | `steps` |
+| `--watch` | `-w` | Watch for file changes | `false` |
+| `--verbose` | `-v` | Enable verbose logging | `false` |
+
+### Examples
+
+#### Development mode
+
+```bash
+motia dev
+```
+
+#### Watch mode
+
+```bash
+motia dev --watch
+```
+
+Output:
+```bash
+2026-02-28 10:30:15 [INFO] motia.cli: Watching for changes...
+2026-02-28 10:30:15 [INFO] motia.cli: Found 2 step(s) and 0 stream(s)
+2026-02-28 10:30:15 [INFO] motia.cli: Connected. Waiting for events...
+
+[File changed: steps/example_step.py]
+[Restarting...]
+```
+
+<Note>
+  Watch mode requires the `watchfiles` package. Install it with:
+  ```bash
+  pip install watchfiles
+  ```
+  If not available, the command runs without watching.
+</Note>
+
+### Auto-restart behavior
+
+When a file changes in watch mode:
+1. The process detects the change
+2. Automatically restarts using `os.execv()`
+3. Reloads all steps and streams
+4. Reconnects to the iii engine
+
+## Environment variables
+
+All development commands automatically load `.env` files:
+
+```bash
+# .env
+III_HOST=localhost
+III_PORT=3000
+LOG_LEVEL=debug
+```
+
+Your steps can access these via `process.env` (JavaScript/TypeScript) or `os.environ` (Python).
+
+## Development workflow
+
+Typical development workflow with Motia:
+
+### 1. Start the iii engine
+
+```bash
+iii -c iii-config.yaml
+```
+
+### 2. Build in development mode
+
+**JavaScript/TypeScript:**
+```bash
+motia dev
+```
+
+**Python:**
+```bash
+motia dev --watch
+```
+
+### 3. Make changes to your steps
+
+Edit files in the `steps/` directory.
+
+### 4. Rebuild (JavaScript/TypeScript only)
+
+```bash
+motia dev
+```
+
+Python watch mode auto-restarts on changes.
+
+### 5. Test your changes
+
+Use the iii Console or make HTTP requests to your steps:
+
+```bash
+curl -X POST http://localhost:3000/messages \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, Motia!"}'
+```
+
+## Performance optimization
+
+### JavaScript/TypeScript builds
+
+Development builds are optimized for speed:
+- External packages aren't bundled (faster rebuilds)
+- Source maps included for debugging
+- No minification (faster builds)
+
+Production builds optimize for deployment:
+- All dependencies bundled
+- Code minified and tree-shaken
+- Source maps for error tracking
+
+### Python watch mode
+
+For large projects, specify only the directories you're working on:
+
+```bash
+motia dev --dir src/api --watch
+```
+
+## Troubleshooting
+
+### Type generation fails
+
+```bash
+Type generation failed: Cannot find module 'steps/example.step.ts'
+```
+
+Solution: Ensure all step files have valid exports:
+
+```typescript
+export const config = { /* ... */ }
+export const handler = async (input, ctx) => { /* ... */ }
+```
+
+### Build fails with import errors
+
+```bash
+Error: Could not resolve "some-package"
+```
+
+Solution: Install missing dependencies:
+
+```bash
+npm install some-package
+```
+
+### Python watch mode not working
+
+```bash
+[WARNING] watchfiles not available; running without watch mode
+```
+
+Solution: Install watchfiles:
+
+```bash
+pip install watchfiles
+```
+
+### Connection refused
+
+```bash
+Error: connect ECONNREFUSED 127.0.0.1:3000
+```
+
+Solution: Start the iii engine first:
+
+```bash
+iii -c iii-config.yaml
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Build commands" icon="hammer" href="/api/cli/build">
+    Create production-ready builds
+  </Card>
+  <Card title="Defining steps" icon="stairs" href="/docs/concepts/steps">
+    Learn how to create Motia steps
+  </Card>
+  <Card title="Triggers" icon="bolt" href="/docs/concepts/triggers">
+    Configure HTTP, queue, cron, and stream triggers
+  </Card>
+  <Card title="iii Console" icon="chart-line" href="/docs/concepts/iii-console">
+    Monitor your application in development
+  </Card>
+</CardGroup>

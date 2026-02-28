@@ -1,0 +1,562 @@
+---
+title: Gmail automation
+description: Build smart email processing workflows with AI classification and automated responses
+---
+
+This example demonstrates building an intelligent Gmail automation system with:
+- OAuth authentication with Gmail API
+- Automatic email classification using AI
+- Smart response generation
+- Scheduled email checking
+- Action-based workflows
+
+<Card title="View source code" icon="github" href="https://github.com/MotiaDev/motia-examples/tree/main/examples/gmail-workflow">
+  Complete source code on GitHub
+</Card>
+
+## Use cases
+
+- Customer support ticket triage
+- Newsletter filtering and summarization
+- Automated follow-ups
+- Priority inbox management
+- Email-to-task conversion
+
+## Architecture
+
+The workflow consists of:
+
+1. **Cron trigger**: Checks Gmail inbox every 5 minutes
+2. **Email classifier**: Uses AI to categorize emails
+3. **Action router**: Routes emails based on classification
+4. **Response generator**: Creates appropriate responses
+5. **Gmail sender**: Sends automated replies
+
+## Prerequisites
+
+Set up Gmail API access:
+
+1. Create a Google Cloud project
+2. Enable Gmail API
+3. Create OAuth 2.0 credentials
+4. Download credentials as `credentials.json`
+
+## Step 1: Check for new emails
+
+Create `steps/check-gmail.step.ts` to poll Gmail:
+
+```typescript steps/check-gmail.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { google } from 'googleapis'
+import { OAuth2Client } from 'google-auth-library'
+
+export const config = {
+  name: 'CheckGmail',
+  description: 'Check Gmail inbox for new emails',
+  triggers: [
+    {
+      type: 'cron',
+      expression: '0 0/5 * * * * *', // Every 5 minutes
+    },
+  ],
+  enqueues: ['email.received'],
+} as const satisfies StepConfig
+
+const oauth2Client = new OAuth2Client(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET,
+  process.env.GMAIL_REDIRECT_URI
+)
+
+oauth2Client.setCredentials({
+  refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+})
+
+const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
+
+export const handler: Handlers<typeof config> = async (
+  _input,
+  { enqueue, logger, state }
+) => {
+  logger.info('Checking Gmail for new emails')
+
+  // Get last check timestamp
+  const lastCheck = await state.get('gmail-state', 'last-check')
+  const lastCheckTime = lastCheck?.timestamp || new Date(Date.now() - 5 * 60 * 1000).toISOString()
+
+  // Search for unread emails since last check
+  const response = await gmail.users.messages.list({
+    userId: 'me',
+    q: `is:unread after:${new Date(lastCheckTime).getTime() / 1000}`,
+    maxResults: 50,
+  })
+
+  const messages = response.data.messages || []
+  logger.info(`Found ${messages.length} new emails`)
+
+  // Process each message
+  for (const message of messages) {
+    const fullMessage = await gmail.users.messages.get({
+      userId: 'me',
+      id: message.id!,
+      format: 'full',
+    })
+
+    const headers = fullMessage.data.payload?.headers || []
+    const subject = headers.find((h) => h.name === 'Subject')?.value || ''
+    const from = headers.find((h) => h.name === 'From')?.value || ''
+    const body = extractBody(fullMessage.data)
+
+    // Enqueue for classification
+    await enqueue({
+      topic: 'email.received',
+      data: {
+        messageId: message.id,
+        threadId: message.threadId,
+        subject,
+        from,
+        body,
+        receivedAt: new Date().toISOString(),
+      },
+    })
+  }
+
+  // Update last check timestamp
+  await state.set('gmail-state', 'last-check', {
+    timestamp: new Date().toISOString(),
+    processedCount: messages.length,
+  })
+}
+
+function extractBody(message: any): string {
+  let body = ''
+  
+  function extract(part: any) {
+    if (part.mimeType === 'text/plain' && part.body?.data) {
+      body = Buffer.from(part.body.data, 'base64').toString('utf-8')
+    }
+    if (part.parts) {
+      part.parts.forEach(extract)
+    }
+  }
+  
+  extract(message.payload)
+  return body || 'No text content'
+}
+```
+
+## Step 2: Classify emails with AI
+
+Create `steps/classify-email.step.ts` for AI classification:
+
+```typescript steps/classify-email.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import OpenAI from 'openai'
+
+const inputSchema = z.object({
+  messageId: z.string(),
+  threadId: z.string(),
+  subject: z.string(),
+  from: z.string(),
+  body: z.string(),
+  receivedAt: z.string(),
+})
+
+export const config = {
+  name: 'ClassifyEmail',
+  description: 'Classify emails using AI',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'email.received',
+      input: inputSchema,
+    },
+  ],
+  enqueues: ['email.classified'],
+} as const satisfies StepConfig
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { enqueue, logger, state }
+) => {
+  const { messageId, threadId, subject, from, body } = input
+
+  logger.info('Classifying email', { messageId, subject })
+
+  // Classify with AI
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4',
+    messages: [
+      {
+        role: 'system',
+        content: `Classify emails into categories and determine required actions.
+
+Categories:
+- support: Customer support requests
+- sales: Sales inquiries
+- newsletter: Marketing/newsletters
+- urgent: Urgent requests requiring immediate attention
+- spam: Spam or promotional content
+- other: Everything else
+
+Actions:
+- reply: Needs a response
+- forward: Should be forwarded to someone
+- archive: Can be archived
+- flag: Needs manual review
+
+Respond with JSON: {"category": "...", "action": "...", "priority": "low|medium|high", "summary": "..."}`,
+      },
+      {
+        role: 'user',
+        content: `Subject: ${subject}\nFrom: ${from}\n\nBody:\n${body.substring(0, 1000)}`,
+      },
+    ],
+  })
+
+  const classification = JSON.parse(response.choices[0].message.content!)
+
+  logger.info('Email classified', {
+    messageId,
+    category: classification.category,
+    action: classification.action,
+    priority: classification.priority,
+  })
+
+  // Store classification
+  await state.set('email-classifications', messageId, {
+    ...classification,
+    messageId,
+    threadId,
+    subject,
+    from,
+    classifiedAt: new Date().toISOString(),
+  })
+
+  // Route based on action
+  await enqueue({
+    topic: 'email.classified',
+    data: {
+      messageId,
+      threadId,
+      subject,
+      from,
+      body,
+      classification,
+    },
+  })
+}
+```
+
+## Step 3: Route to action handlers
+
+Create `steps/route-email.step.ts` to route emails:
+
+```typescript steps/route-email.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+
+const inputSchema = z.object({
+  messageId: z.string(),
+  threadId: z.string(),
+  subject: z.string(),
+  from: z.string(),
+  body: z.string(),
+  classification: z.object({
+    category: z.string(),
+    action: z.string(),
+    priority: z.string(),
+    summary: z.string(),
+  }),
+})
+
+export const config = {
+  name: 'RouteEmail',
+  description: 'Route emails to appropriate action handlers',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'email.classified',
+      input: inputSchema,
+    },
+  ],
+  enqueues: ['email.reply', 'email.forward', 'email.archive', 'email.flag'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { enqueue, logger }
+) => {
+  const { messageId, threadId, classification } = input
+
+  logger.info('Routing email', {
+    messageId,
+    action: classification.action,
+  })
+
+  switch (classification.action) {
+    case 'reply':
+      await enqueue({
+        topic: 'email.reply',
+        data: input,
+      })
+      break
+
+    case 'forward':
+      await enqueue({
+        topic: 'email.forward',
+        data: input,
+      })
+      break
+
+    case 'archive':
+      await enqueue({
+        topic: 'email.archive',
+        data: { messageId, threadId },
+      })
+      break
+
+    case 'flag':
+      await enqueue({
+        topic: 'email.flag',
+        data: input,
+      })
+      break
+
+    default:
+      logger.warn('Unknown action', { action: classification.action })
+  }
+}
+```
+
+## Step 4: Generate and send replies
+
+Create `steps/reply-email.step.ts` for automated responses:
+
+```typescript steps/reply-email.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import { google } from 'googleapis'
+import { OAuth2Client } from 'google-auth-library'
+import OpenAI from 'openai'
+
+const inputSchema = z.object({
+  messageId: z.string(),
+  threadId: z.string(),
+  subject: z.string(),
+  from: z.string(),
+  body: z.string(),
+  classification: z.object({
+    category: z.string(),
+    priority: z.string(),
+    summary: z.string(),
+  }),
+})
+
+export const config = {
+  name: 'ReplyEmail',
+  description: 'Generate and send email replies',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'email.reply',
+      input: inputSchema,
+    },
+  ],
+} as const satisfies StepConfig
+
+const oauth2Client = new OAuth2Client(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET,
+  process.env.GMAIL_REDIRECT_URI
+)
+
+oauth2Client.setCredentials({
+  refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+})
+
+const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { logger, state }
+) => {
+  const { messageId, threadId, subject, from, body, classification } = input
+
+  logger.info('Generating reply', { messageId, category: classification.category })
+
+  // Generate reply with AI
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4',
+    messages: [
+      {
+        role: 'system',
+        content: `You are a helpful email assistant. Generate professional, friendly email responses.
+
+Guidelines:
+- Keep responses concise and clear
+- Be polite and professional
+- Address the sender's main concerns
+- Include relevant information
+- For support requests, acknowledge and provide next steps
+- For sales inquiries, provide helpful information and offer to connect`,
+      },
+      {
+        role: 'user',
+        content: `Category: ${classification.category}\nSummary: ${classification.summary}\n\nOriginal email:\nSubject: ${subject}\nFrom: ${from}\n\n${body}\n\nGenerate a reply:`,
+      },
+    ],
+  })
+
+  const replyBody = response.choices[0].message.content!
+
+  // Create email message
+  const replySubject = subject.startsWith('Re:') ? subject : `Re: ${subject}`
+  const emailContent = [
+    `To: ${from}`,
+    `Subject: ${replySubject}`,
+    `In-Reply-To: ${messageId}`,
+    `References: ${messageId}`,
+    '',
+    replyBody,
+  ].join('\n')
+
+  const encodedMessage = Buffer.from(emailContent)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+
+  // Send reply
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw: encodedMessage,
+      threadId,
+    },
+  })
+
+  // Store reply record
+  await state.set('email-replies', `${messageId}-reply`, {
+    originalMessageId: messageId,
+    threadId,
+    replyBody,
+    sentAt: new Date().toISOString(),
+    category: classification.category,
+  })
+
+  logger.info('Reply sent', { messageId, threadId })
+}
+```
+
+## Step 5: Track metrics
+
+Create `steps/email-metrics.step.ts` to track performance:
+
+```typescript steps/email-metrics.step.ts
+import type { Handlers, StepConfig } from 'motia'
+
+export const config = {
+  name: 'EmailMetrics',
+  description: 'Track email automation metrics',
+  triggers: [
+    {
+      type: 'state',
+      namespace: 'email-classifications',
+    },
+  ],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { logger, state }
+) => {
+  const classification = input.value
+
+  logger.info('Updating metrics', { category: classification.category })
+
+  // Get current metrics
+  let metrics = await state.get('metrics', 'email-stats')
+  if (!metrics) {
+    metrics = {
+      totalProcessed: 0,
+      byCategory: {},
+      byAction: {},
+      byPriority: {},
+    }
+  }
+
+  // Update counters
+  metrics.totalProcessed++
+  metrics.byCategory[classification.category] = (metrics.byCategory[classification.category] || 0) + 1
+  metrics.byAction[classification.action] = (metrics.byAction[classification.action] || 0) + 1
+  metrics.byPriority[classification.priority] = (metrics.byPriority[classification.priority] || 0) + 1
+
+  await state.set('metrics', 'email-stats', metrics)
+
+  logger.info('Metrics updated', { totalProcessed: metrics.totalProcessed })
+}
+```
+
+## Configuration
+
+Set environment variables in `.env`:
+
+```bash
+GMAIL_CLIENT_ID=your-client-id
+GMAIL_CLIENT_SECRET=your-client-secret
+GMAIL_REDIRECT_URI=http://localhost:3000/oauth/callback
+GMAIL_REFRESH_TOKEN=your-refresh-token
+OPENAI_API_KEY=your-openai-key
+```
+
+## Testing
+
+Manually trigger email check:
+
+```bash
+curl -X POST http://localhost:3000/admin/trigger/check-gmail
+```
+
+View metrics:
+
+```bash
+curl http://localhost:3000/metrics/email-stats
+```
+
+## What you learned
+
+<CardGroup cols={2}>
+  <Card title="Cron triggers" icon="clock" href="/triggers/cron">
+    Schedule periodic email checks
+  </Card>
+  <Card title="AI classification" icon="brain">
+    Use LLMs to categorize and understand emails
+  </Card>
+  <Card title="Workflow routing" icon="route" href="/guides/workflows">
+    Route tasks based on conditions
+  </Card>
+  <Card title="State triggers" icon="database" href="/triggers/state">
+    React to state changes for metrics
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="GitHub PR manager" icon="github" href="/examples/github-pr-manager">
+    Automate GitHub workflows
+  </Card>
+  <Card title="Workflows guide" icon="book" href="/guides/workflows">
+    Learn advanced workflow patterns
+  </Card>
+</CardGroup>

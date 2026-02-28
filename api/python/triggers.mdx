@@ -1,0 +1,481 @@
+---
+title: Trigger factory functions
+description: Create trigger configurations for HTTP, queue, cron, state, and stream events
+---
+
+Trigger factory functions create typed configuration objects that define when and how a step should be executed. Each trigger type has specific parameters and behavior.
+
+## http()
+
+Create an HTTP API trigger for handling HTTP requests.
+
+```python
+from motia import http
+
+trigger = http("POST", "/api/orders")
+```
+
+### Signature
+
+```python
+def http(
+    method: ApiRouteMethod,
+    path: str,
+    *,
+    body_schema: Any | None = None,
+    response_schema: dict[int, Any] | None = None,
+    query_params: list[QueryParam] | None = None,
+    middleware: list[ApiMiddleware] | None = None,
+    condition: TriggerCondition | None = None,
+) -> ApiTrigger
+```
+
+<ParamField path="method" type="ApiRouteMethod" required>
+  HTTP method: `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, `"OPTIONS"`, or `"HEAD"`.
+</ParamField>
+
+<ParamField path="path" type="string" required>
+  URL path for the endpoint. Supports path parameters like `/users/:id`.
+</ParamField>
+
+<ParamField path="body_schema" type="Any">
+  Pydantic model or schema for request body validation.
+</ParamField>
+
+<ParamField path="response_schema" type="dict[int, Any]">
+  Response schemas mapped by status code for documentation and validation.
+</ParamField>
+
+<ParamField path="query_params" type="list[QueryParam]">
+  List of query parameter definitions with name and description.
+</ParamField>
+
+<ParamField path="middleware" type="list[ApiMiddleware]">
+  Middleware functions to execute before the handler.
+</ParamField>
+
+<ParamField path="condition" type="TriggerCondition">
+  Function that determines if the trigger should fire: `(input, ctx) -> bool`.
+</ParamField>
+
+### Example
+
+```python
+from motia import http, step, ApiRequest, ApiResponse, FlowContext
+from pydantic import BaseModel
+
+class CreateOrderBody(BaseModel):
+    description: str
+    amount: float
+
+class OrderResponse(BaseModel):
+    id: str
+    status: str
+
+def is_verified_user(request: ApiRequest, ctx: FlowContext) -> bool:
+    """Only process requests from verified users."""
+    headers = request.headers
+    return headers.get("x-user-verified") == "true"
+
+my_step = step({
+    "name": "CreateOrder",
+    "triggers": [
+        http(
+            "POST",
+            "/api/orders",
+            body_schema=CreateOrderBody,
+            response_schema={
+                201: OrderResponse,
+                400: dict,
+            },
+            condition=is_verified_user,
+        ),
+    ],
+})
+```
+
+## api()
+
+<Warning>
+  `api()` is deprecated. Use `http()` instead.
+</Warning>
+
+Alias for `http()` maintained for backwards compatibility. Has identical signature and behavior.
+
+## queue()
+
+Create a queue trigger for processing messages from a topic.
+
+```python
+from motia import queue
+
+trigger = queue("order.created")
+```
+
+### Signature
+
+```python
+def queue(
+    topic: str,
+    *,
+    input: Any | None = None,
+    infrastructure: InfrastructureConfig | None = None,
+    condition: TriggerCondition | None = None,
+) -> QueueTrigger
+```
+
+<ParamField path="topic" type="string" required>
+  Queue topic name to subscribe to.
+</ParamField>
+
+<ParamField path="input" type="Any">
+  Pydantic model or schema for message validation.
+</ParamField>
+
+<ParamField path="infrastructure" type="InfrastructureConfig">
+  Override default infrastructure configuration for this trigger.
+</ParamField>
+
+<ParamField path="condition" type="TriggerCondition">
+  Function that determines if the trigger should fire: `(input, ctx) -> bool`.
+</ParamField>
+
+### Example
+
+```python
+from motia import queue, step, FlowContext
+from pydantic import BaseModel
+
+class OrderData(BaseModel):
+    order_id: str
+    amount: float
+
+def is_high_value(data: OrderData, ctx: FlowContext) -> bool:
+    """Only process high-value orders."""
+    return data.amount > 1000
+
+my_step = step({
+    "name": "ProcessHighValueOrder",
+    "triggers": [
+        queue(
+            "order.created",
+            input=OrderData,
+            condition=is_high_value,
+            infrastructure={
+                "handler": {"ram": 512, "timeout": 60},
+                "queue": {"max_retries": 5},
+            },
+        ),
+    ],
+})
+
+async def handler(data: OrderData, ctx: FlowContext) -> None:
+    ctx.logger.info(f"Processing order: {data.order_id}")
+    # Process the high-value order
+```
+
+## cron()
+
+Create a cron trigger for scheduled execution.
+
+```python
+from motia import cron
+
+trigger = cron("0 0 * * *")  # Daily at midnight
+```
+
+### Signature
+
+```python
+def cron(
+    expression: str,
+    *,
+    condition: TriggerCondition | None = None,
+) -> CronTrigger
+```
+
+<ParamField path="expression" type="string" required>
+  Cron expression defining the schedule. Supports standard 5-field or extended 6-field format with seconds.
+</ParamField>
+
+<ParamField path="condition" type="TriggerCondition">
+  Function that determines if the trigger should fire: `(input, ctx) -> bool`.
+</ParamField>
+
+### Cron expression format
+
+```
+# 6-field format (with seconds):
+┌───────────── second (0-59)
+│ ┌───────────── minute (0-59)
+│ │ ┌───────────── hour (0-23)
+│ │ │ ┌───────────── day of month (1-31)
+│ │ │ │ ┌───────────── month (1-12)
+│ │ │ │ │ ┌───────────── day of week (0-6)
+│ │ │ │ │ │
+* * * * * *
+
+# 5-field format (without seconds):
+┌───────────── minute (0-59)
+│ ┌───────────── hour (0-23)
+│ │ ┌───────────── day of month (1-31)
+│ │ │ ┌───────────── month (1-12)
+│ │ │ │ ┌───────────── day of week (0-6)
+│ │ │ │ │
+* * * * *
+```
+
+### Example
+
+```python
+from motia import cron, step, FlowContext
+import datetime
+
+def only_weekdays(input: None, ctx: FlowContext) -> bool:
+    """Only run on weekdays."""
+    return datetime.datetime.now().weekday() < 5
+
+my_step = step({
+    "name": "DailySummary",
+    "triggers": [
+        cron("0 9 * * *", condition=only_weekdays),  # 9 AM daily, weekdays only
+    ],
+})
+
+async def handler(input: None, ctx: FlowContext) -> None:
+    ctx.logger.info("Running daily summary")
+    # Generate and send summary
+```
+
+## state()
+
+Create a state trigger that fires when state changes occur.
+
+```python
+from motia import state
+
+trigger = state()
+```
+
+### Signature
+
+```python
+def state(
+    *,
+    condition: TriggerCondition | None = None,
+) -> StateTrigger
+```
+
+<ParamField path="condition" type="TriggerCondition">
+  Function that determines if the trigger should fire: `(input, ctx) -> bool`. Typically used to filter by scope/key.
+</ParamField>
+
+### Example
+
+```python
+from motia import state, step, FlowContext, StateTriggerInput
+
+def only_user_changes(input: StateTriggerInput, ctx: FlowContext) -> bool:
+    """Only trigger for user state changes."""
+    return input.group_id == "users"
+
+my_step = step({
+    "name": "OnUserStateChange",
+    "triggers": [
+        state(condition=only_user_changes),
+    ],
+})
+
+async def handler(input: StateTriggerInput, ctx: FlowContext) -> None:
+    ctx.logger.info(
+        f"User {input.item_id} changed from {input.old_value} to {input.new_value}"
+    )
+    # React to state change
+```
+
+### StateTriggerInput properties
+
+<ResponseField name="type" type="'state'">
+  Always `"state"` for state triggers.
+</ResponseField>
+
+<ResponseField name="group_id" type="string">
+  The state scope/group that changed.
+</ResponseField>
+
+<ResponseField name="item_id" type="string">
+  The key within the scope that changed.
+</ResponseField>
+
+<ResponseField name="old_value" type="Any">
+  The previous value before the change.
+</ResponseField>
+
+<ResponseField name="new_value" type="Any">
+  The new value after the change.
+</ResponseField>
+
+## stream()
+
+Create a stream trigger that fires on stream events (create, update, delete).
+
+```python
+from motia import stream
+
+trigger = stream("todo")
+```
+
+### Signature
+
+```python
+def stream(
+    stream_name: str,
+    *,
+    group_id: str | None = None,
+    item_id: str | None = None,
+    condition: TriggerCondition | None = None,
+) -> StreamTrigger
+```
+
+<ParamField path="stream_name" type="string" required>
+  Name of the stream to subscribe to.
+</ParamField>
+
+<ParamField path="group_id" type="string">
+  Filter to only receive events for a specific group.
+</ParamField>
+
+<ParamField path="item_id" type="string">
+  Filter to only receive events for a specific item within a group.
+</ParamField>
+
+<ParamField path="condition" type="TriggerCondition">
+  Function that determines if the trigger should fire: `(input, ctx) -> bool`.
+</ParamField>
+
+### Example
+
+```python
+from motia import stream, step, FlowContext, StreamTriggerInput
+
+def only_creates(input: StreamTriggerInput, ctx: FlowContext) -> bool:
+    """Only trigger on create events."""
+    return input.event.type == "create"
+
+my_step = step({
+    "name": "OnTodoCreated",
+    "triggers": [
+        stream(
+            "todo",
+            group_id="user-123",  # Only for this user
+            condition=only_creates,
+        ),
+    ],
+})
+
+async def handler(input: StreamTriggerInput, ctx: FlowContext) -> None:
+    ctx.logger.info(
+        f"New todo created: {input.id} in group {input.group_id}"
+    )
+    ctx.logger.info(f"Data: {input.event.data}")
+    # Process new todo
+```
+
+### StreamTriggerInput properties
+
+<ResponseField name="type" type="'stream'">
+  Always `"stream"` for stream triggers.
+</ResponseField>
+
+<ResponseField name="stream_name" type="string">
+  Name of the stream that fired the event.
+</ResponseField>
+
+<ResponseField name="group_id" type="string">
+  The group ID where the event occurred.
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  The item ID that changed.
+</ResponseField>
+
+<ResponseField name="timestamp" type="int">
+  Unix timestamp (milliseconds) when the event occurred.
+</ResponseField>
+
+<ResponseField name="event" type="StreamEvent">
+  Event details with `type` (`"create"`, `"update"`, or `"delete"`) and `data`.
+</ResponseField>
+
+## Trigger conditions
+
+All trigger types support an optional `condition` parameter that filters when the trigger fires.
+
+### Signature
+
+```python
+TriggerCondition = Callable[[Any, FlowContext], bool | Awaitable[bool]]
+```
+
+Condition functions receive the input data and flow context, and return a boolean (or async boolean).
+
+### Example with multiple conditions
+
+```python
+from motia import http, queue, step, FlowContext, ApiRequest
+
+def is_admin(request: ApiRequest, ctx: FlowContext) -> bool:
+    """Check if user has admin role."""
+    headers = request.headers
+    return headers.get("x-user-role") == "admin"
+
+def is_high_priority(data: dict, ctx: FlowContext) -> bool:
+    """Check if queue message is high priority."""
+    return data.get("priority") == "high"
+
+my_step = step({
+    "name": "AdminActions",
+    "triggers": [
+        http("POST", "/admin/actions", condition=is_admin),
+        queue("admin.actions", condition=is_high_priority),
+    ],
+})
+```
+
+## TriggerInfo
+
+The `ctx.trigger` property provides information about which trigger fired:
+
+<ResponseField name="type" type="'http' | 'queue' | 'cron' | 'state' | 'stream'">
+  The type of trigger that fired.
+</ResponseField>
+
+<ResponseField name="index" type="int">
+  Index of the trigger in the triggers list.
+</ResponseField>
+
+<ResponseField name="path" type="string">
+  For HTTP triggers, the matched path.
+</ResponseField>
+
+<ResponseField name="method" type="string">
+  For HTTP triggers, the HTTP method.
+</ResponseField>
+
+<ResponseField name="topic" type="string">
+  For queue triggers, the topic name.
+</ResponseField>
+
+<ResponseField name="expression" type="string">
+  For cron triggers, the cron expression.
+</ResponseField>
+
+### Example
+
+```python
+async def handler(input, ctx: FlowContext) -> None:
+    if ctx.trigger.type == "http":
+        ctx.logger.info(f"HTTP {ctx.trigger.method} {ctx.trigger.path}")
+    elif ctx.trigger.type == "queue":
+        ctx.logger.info(f"Queue message from {ctx.trigger.topic}")
+```

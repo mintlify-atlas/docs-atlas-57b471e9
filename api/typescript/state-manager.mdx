@@ -1,0 +1,485 @@
+---
+title: StateManager
+description: API for managing persistent state in Motia workflows
+---
+
+## Overview
+
+The StateManager provides a key-value store for persisting data across step executions. State is organized by groups (scopes) and items (keys), enabling efficient querying and management.
+
+Access the state manager through the context object in step handlers:
+
+```typescript
+async (input, ctx) => {
+  await ctx.state.set('orders', orderId, orderData)
+  const order = await ctx.state.get('orders', orderId)
+}
+```
+
+## Type signature
+
+```typescript
+interface InternalStateManager {
+  get<T>(groupId: string, key: string): Promise<T | null>
+  set<T>(groupId: string, key: string, value: T): Promise<StreamSetResult<T> | null>
+  update<T>(groupId: string, key: string, ops: UpdateOp[]): Promise<StreamSetResult<T> | null>
+  delete<T>(groupId: string, key: string): Promise<T | null>
+  list<T>(groupId: string): Promise<T[]>
+  clear(groupId: string): Promise<void>
+}
+```
+
+## Methods
+
+### get()
+
+Retrieve a value from state.
+
+<ParamField path="groupId" type="string" required>
+  State group identifier (e.g., 'orders', 'users')
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  Item key within the group
+</ParamField>
+
+<ResponseField name="return" type="Promise<T | null>">
+  The stored value or `null` if not found
+</ResponseField>
+
+#### Example
+
+```typescript
+interface Order {
+  id: string
+  status: string
+  amount: number
+}
+
+async (input, ctx) => {
+  const order = await ctx.state.get<Order>('orders', input.orderId)
+  
+  if (!order) {
+    return { status: 404, body: { error: 'Order not found' } }
+  }
+  
+  return { status: 200, body: order }
+}
+```
+
+### set()
+
+Store or update a value in state.
+
+<ParamField path="groupId" type="string" required>
+  State group identifier
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  Item key within the group
+</ParamField>
+
+<ParamField path="value" type="T" required>
+  Value to store (must be JSON-serializable)
+</ParamField>
+
+<ResponseField name="return" type="Promise<StreamSetResult<T> | null>">
+  Result containing the stored value and metadata, or `null` on failure
+</ResponseField>
+
+```typescript
+type StreamSetResult<T> = {
+  value: T
+  version: number
+  timestamp: number
+}
+```
+
+#### Example
+
+```typescript
+async (input, ctx) => {
+  const order = {
+    id: input.orderId,
+    status: 'pending',
+    amount: input.amount,
+    createdAt: Date.now(),
+  }
+  
+  const result = await ctx.state.set('orders', order.id, order)
+  
+  ctx.logger.info('Order created', {
+    orderId: order.id,
+    version: result?.version,
+  })
+  
+  return { status: 201, body: order }
+}
+```
+
+### update()
+
+Update a value using JSON Patch operations.
+
+<ParamField path="groupId" type="string" required>
+  State group identifier
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  Item key within the group
+</ParamField>
+
+<ParamField path="ops" type="UpdateOp[]" required>
+  Array of JSON Patch operations
+</ParamField>
+
+<ResponseField name="return" type="Promise<StreamSetResult<T> | null>">
+  Result containing the updated value and metadata, or `null` on failure
+</ResponseField>
+
+```typescript
+type UpdateOp = 
+  | { op: 'add', path: string, value: any }
+  | { op: 'remove', path: string }
+  | { op: 'replace', path: string, value: any }
+  | { op: 'move', from: string, path: string }
+  | { op: 'copy', from: string, path: string }
+  | { op: 'test', path: string, value: any }
+```
+
+#### Example
+
+```typescript
+async (input, ctx) => {
+  // Update order status and add tracking number
+  const result = await ctx.state.update('orders', input.orderId, [
+    { op: 'replace', path: '/status', value: 'shipped' },
+    { op: 'add', path: '/trackingNumber', value: input.trackingNumber },
+    { op: 'replace', path: '/shippedAt', value: Date.now() },
+  ])
+  
+  if (!result) {
+    return { status: 404, body: { error: 'Order not found' } }
+  }
+  
+  ctx.logger.info('Order updated', {
+    orderId: input.orderId,
+    version: result.version,
+  })
+  
+  return { status: 200, body: result.value }
+}
+```
+
+### delete()
+
+Remove a value from state.
+
+<ParamField path="groupId" type="string" required>
+  State group identifier
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  Item key within the group
+</ParamField>
+
+<ResponseField name="return" type="Promise<T | null>">
+  The deleted value or `null` if not found
+</ResponseField>
+
+#### Example
+
+```typescript
+async (input, ctx) => {
+  const deletedOrder = await ctx.state.delete('orders', input.orderId)
+  
+  if (!deletedOrder) {
+    return { status: 404, body: { error: 'Order not found' } }
+  }
+  
+  ctx.logger.info('Order deleted', { orderId: input.orderId })
+  
+  return { status: 200, body: { deleted: true, order: deletedOrder } }
+}
+```
+
+### list()
+
+Retrieve all items in a group.
+
+<ParamField path="groupId" type="string" required>
+  State group identifier
+</ParamField>
+
+<ResponseField name="return" type="Promise<T[]>">
+  Array of all items in the group
+</ResponseField>
+
+#### Example
+
+```typescript
+async (input, ctx) => {
+  const allOrders = await ctx.state.list<Order>('orders')
+  
+  const pendingOrders = allOrders.filter(order => order.status === 'pending')
+  
+  ctx.logger.info('Orders retrieved', {
+    total: allOrders.length,
+    pending: pendingOrders.length,
+  })
+  
+  return {
+    status: 200,
+    body: { orders: allOrders, count: allOrders.length },
+  }
+}
+```
+
+### clear()
+
+Delete all items in a group.
+
+<ParamField path="groupId" type="string" required>
+  State group identifier
+</ParamField>
+
+<ResponseField name="return" type="Promise<void>">
+  Resolves when all items are deleted
+</ResponseField>
+
+#### Example
+
+```typescript
+async (input, ctx) => {
+  ctx.logger.info('Clearing all orders')
+  
+  await ctx.state.clear('orders')
+  
+  ctx.logger.info('All orders cleared')
+  
+  return { status: 200, body: { message: 'All orders cleared' } }
+}
+```
+
+## Usage patterns
+
+### CRUD operations
+
+Implement complete CRUD functionality:
+
+```typescript
+import { step, http } from 'motia'
+import { z } from 'zod'
+
+const orderSchema = z.object({
+  amount: z.number(),
+  items: z.array(z.string()),
+})
+
+export const { config, handler } = step(
+  {
+    name: 'OrderAPI',
+    triggers: [
+      http('POST', '/orders', { bodySchema: orderSchema }),
+      http('GET', '/orders/:orderId'),
+      http('PUT', '/orders/:orderId', { bodySchema: orderSchema }),
+      http('DELETE', '/orders/:orderId'),
+    ],
+  },
+  async (input, ctx) => {
+    const { method, pathParams, body } = input.request
+    const orderId = pathParams.orderId || generateId()
+    
+    if (method === 'POST') {
+      const order = { id: orderId, ...body, status: 'pending' }
+      await ctx.state.set('orders', orderId, order)
+      return { status: 201, body: order }
+    }
+    
+    if (method === 'GET') {
+      const order = await ctx.state.get('orders', orderId)
+      if (!order) return { status: 404, body: { error: 'Not found' } }
+      return { status: 200, body: order }
+    }
+    
+    if (method === 'PUT') {
+      const order = { id: orderId, ...body }
+      await ctx.state.set('orders', orderId, order)
+      return { status: 200, body: order }
+    }
+    
+    if (method === 'DELETE') {
+      const deleted = await ctx.state.delete('orders', orderId)
+      if (!deleted) return { status: 404, body: { error: 'Not found' } }
+      return { status: 200, body: { deleted: true } }
+    }
+  }
+)
+```
+
+### State-triggered workflows
+
+React to state changes:
+
+```typescript
+import { step, state, queue } from 'motia'
+import type { StateTriggerInput } from 'motia'
+
+interface Order {
+  id: string
+  status: string
+  email: string
+}
+
+// Listen for status changes
+export const { config, handler } = step(
+  {
+    name: 'OnOrderStatusChange',
+    triggers: [
+      state((input: StateTriggerInput<Order>) => {
+        return input.group_id === 'orders' && 
+               input.old_value?.status !== input.new_value?.status
+      }),
+    ],
+    enqueues: ['notification'],
+  },
+  async (input, ctx) => {
+    const { item_id, old_value, new_value } = input
+    
+    ctx.logger.info('Order status changed', {
+      orderId: item_id,
+      from: old_value?.status,
+      to: new_value?.status,
+    })
+    
+    await ctx.enqueue({
+      topic: 'notification',
+      data: {
+        email: new_value.email,
+        templateId: 'order-status-changed',
+        orderId: item_id,
+        status: new_value.status,
+      },
+    })
+  }
+)
+```
+
+### Batch processing
+
+Process all items in a group:
+
+```typescript
+import { step, cron } from 'motia'
+
+interface Order {
+  id: string
+  status: string
+  shipDate: string
+  complete: boolean
+}
+
+export const { config, handler } = step(
+  {
+    name: 'AuditOrders',
+    triggers: [cron('0 0 * * *')], // Daily at midnight
+    enqueues: ['notification'],
+  },
+  async (_input, ctx) => {
+    const orders = await ctx.state.list<Order>('orders')
+    
+    const now = new Date()
+    let expiredCount = 0
+    
+    for (const order of orders) {
+      const shipDate = new Date(order.shipDate)
+      
+      if (!order.complete && now > shipDate) {
+        ctx.logger.warn('Order expired', {
+          orderId: order.id,
+          shipDate: order.shipDate,
+        })
+        
+        await ctx.enqueue({
+          topic: 'notification',
+          data: {
+            templateId: 'order-expired',
+            orderId: order.id,
+          },
+        })
+        
+        expiredCount++
+      }
+    }
+    
+    ctx.logger.info('Audit complete', {
+      total: orders.length,
+      expired: expiredCount,
+    })
+  }
+)
+```
+
+### Atomic updates
+
+Use JSON Patch for safe concurrent updates:
+
+```typescript
+async (input, ctx) => {
+  // Increment a counter atomically
+  const result = await ctx.state.update('counters', 'page-views', [
+    { op: 'replace', path: '/count', value: (await getCount()) + 1 },
+    { op: 'replace', path: '/lastUpdated', value: Date.now() },
+  ])
+  
+  return { status: 200, body: result?.value }
+}
+```
+
+## Best practices
+
+1. **Use typed access**: Always specify the type parameter for type-safe operations:
+   ```typescript
+   const order = await ctx.state.get<Order>('orders', orderId)
+   ```
+
+2. **Handle null returns**: Check for `null` when getting or deleting:
+   ```typescript
+   const order = await ctx.state.get('orders', orderId)
+   if (!order) {
+     return { status: 404, body: { error: 'Not found' } }
+   }
+   ```
+
+3. **Use meaningful group names**: Organize state by entity type:
+   ```typescript
+   await ctx.state.set('orders', orderId, order)
+   await ctx.state.set('users', userId, user)
+   await ctx.state.set('sessions', sessionId, session)
+   ```
+
+4. **Prefer update() for modifications**: Use JSON Patch operations instead of get + set:
+   ```typescript
+   // Good: atomic update
+   await ctx.state.update('orders', orderId, [
+     { op: 'replace', path: '/status', value: 'shipped' },
+   ])
+   
+   // Avoid: race condition possible
+   const order = await ctx.state.get('orders', orderId)
+   order.status = 'shipped'
+   await ctx.state.set('orders', orderId, order)
+   ```
+
+5. **Log state operations**: Include state operations in logs for debugging:
+   ```typescript
+   ctx.logger.info('Updating order status', { orderId })
+   await ctx.state.update('orders', orderId, ops)
+   ctx.logger.info('Order status updated')
+   ```
+
+## Related
+
+- [FlowContext](/api/typescript/context) - Full context API
+- [Stream API](/api/typescript/streams) - Real-time stream operations
+- [Triggers](/api/typescript/triggers) - State trigger configuration

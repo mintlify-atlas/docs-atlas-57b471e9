@@ -1,0 +1,146 @@
+---
+title: CLI overview
+description: Install and use the Motia CLI to create projects and manage development workflows
+---
+
+The Motia CLI provides commands for creating new projects, building applications, and managing development workflows. It supports both JavaScript/TypeScript and Python projects.
+
+## Installation
+
+### Using Homebrew (macOS/Linux)
+
+```bash
+brew tap MotiaDev/tap
+brew install motia-cli
+```
+
+### Using shell script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MotiaDev/motia-cli/main/install.sh | sh
+```
+
+### Verify installation
+
+```bash
+motia-cli --version
+```
+
+## Prerequisites
+
+- **Node.js 18+** - For TypeScript/JavaScript projects
+- **Python 3** - For Python projects (optional)
+- **iii engine** - The Rust-based runtime that powers Motia (auto-installed during project creation)
+
+## Available commands
+
+The Motia CLI provides commands for both the standalone CLI tool and the framework-level commands:
+
+### Standalone CLI (motia-cli)
+
+| Command | Description |
+|---------|-------------|
+| `motia-cli create` | Create a new Motia project with iii configuration |
+
+### Framework commands (motia/motia-iii)
+
+These commands are available within a Motia project:
+
+| Command | Description |
+|---------|-------------|
+| `motia dev` | Build and run the project in development mode |
+| `motia build` | Build the project for production deployment |
+| `motia typegen` | Generate TypeScript types from steps and streams |
+
+### Python-specific commands
+
+When working with Python projects, use the `motia` command:
+
+| Command | Description |
+|---------|-------------|
+| `motia run` | Discover and run steps and streams |
+| `motia dev` | Run in development mode with optional file watching |
+| `motia build` | Generate production build at dist/index.py |
+| `motia typegen` | Generate schema manifest from steps and streams |
+
+## Quick start
+
+Create your first Motia application:
+
+```bash
+# Create a new project
+motia-cli create my-app
+
+# Navigate to project directory
+cd my-app
+
+# Start the iii engine
+iii -c iii-config.yaml
+```
+
+The CLI will:
+- Auto-detect and install the iii engine if needed
+- Prompt you to select a language (TypeScript, JavaScript, or Python)
+- Download the appropriate template
+- Install dependencies
+- Generate an `iii-config.yaml` configuration file
+
+## Terminal output example
+
+```bash
+$ motia-cli create my-app
+
+  ╭───────────────────────────────────────╮
+  │  == Welcome to Motia powered by iii   │
+  ╰───────────────────────────────────────╯
+
+  Project folder name: my-app
+  Do you have iii installed? (Y/n): Y
+
+  Creating project in ./my-app
+
+  ↓ package.json
+  ↓ iii-config.yaml
+  ↓ steps/example.step.ts
+  ↓ .gitignore
+
+  Installing dependencies...
+
+  ✓ Project created successfully!
+
+  Next steps:
+    cd my-app
+    iii -c iii-config.yaml
+```
+
+## Environment configuration
+
+All CLI commands automatically load environment variables from `.env` files in your project root.
+
+### GitHub token (optional)
+
+When creating projects, you can set a `GITHUB_TOKEN` to increase API rate limits:
+
+```bash
+export GITHUB_TOKEN=your_github_token
+motia-cli create my-app
+```
+
+This is useful if you encounter rate limit errors when downloading templates.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Create command" icon="plus" href="/api/cli/create">
+    Learn about project creation and templates
+  </Card>
+  <Card title="Development commands" icon="code" href="/api/cli/dev">
+    Build and run your project locally
+  </Card>
+  <Card title="Build commands" icon="hammer" href="/api/cli/build">
+    Create production-ready builds
+  </Card>
+  <Card title="Quick start guide" icon="rocket" href="/docs/getting-started/quick-start">
+    Complete tutorial for new projects
+  </Card>
+</CardGroup>

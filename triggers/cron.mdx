@@ -1,0 +1,443 @@
+---
+title: Cron trigger
+description: Schedule workflows to run at specific times using cron expressions
+---
+
+Cron triggers allow you to schedule workflows to run at specific times or intervals using standard cron expressions.
+
+## Basic usage
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, cron } from 'motia'
+
+    export const config = step({
+      name: 'daily-report',
+      triggers: [cron('0 9 * * *')], // Every day at 9 AM
+    })
+
+    export const handler = async (input, ctx) => {
+      ctx.logger.info('Generating daily report')
+      
+      const report = await generateReport()
+      
+      ctx.logger.info('Report generated', { records: report.length })
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, cron
+
+    config = step(
+        name='daily-report',
+        triggers=[cron('0 9 * * *')],  # Every day at 9 AM
+    )
+
+    async def handler(input, ctx):
+        ctx.logger.info('Generating daily report')
+        
+        report = await generate_report()
+        
+        ctx.logger.info('Report generated', {'records': len(report)})
+    ```
+  </Tab>
+</Tabs>
+
+## Cron expression syntax
+
+Cron expressions use five fields:
+
+```
+┌───────────── minute (0 - 59)
+│ ┌───────────── hour (0 - 23)
+│ │ ┌───────────── day of month (1 - 31)
+│ │ │ ┌───────────── month (1 - 12)
+│ │ │ │ ┌───────────── day of week (0 - 6) (Sunday to Saturday)
+│ │ │ │ │
+* * * * *
+```
+
+## Common patterns
+
+### Every minute
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, cron } from 'motia'
+
+    export const config = step({
+      name: 'health-check',
+      triggers: [cron('* * * * *')],
+    })
+
+    export const handler = async (input, ctx) => {
+      await performHealthCheck()
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, cron
+
+    config = step(
+        name='health-check',
+        triggers=[cron('* * * * *')],
+    )
+
+    async def handler(input, ctx):
+        await perform_health_check()
+    ```
+  </Tab>
+</Tabs>
+
+### Every hour
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const config = step({
+      name: 'hourly-sync',
+      triggers: [cron('0 * * * *')],
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    config = step(
+        name='hourly-sync',
+        triggers=[cron('0 * * * *')],
+    )
+    ```
+  </Tab>
+</Tabs>
+
+### Every day at specific time
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const config = step({
+      name: 'daily-backup',
+      triggers: [cron('0 2 * * *')], // 2 AM every day
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    config = step(
+        name='daily-backup',
+        triggers=[cron('0 2 * * *')],  # 2 AM every day
+    )
+    ```
+  </Tab>
+</Tabs>
+
+### Every weekday
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const config = step({
+      name: 'weekday-report',
+      triggers: [cron('0 9 * * 1-5')], // 9 AM Monday-Friday
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    config = step(
+        name='weekday-report',
+        triggers=[cron('0 9 * * 1-5')],  # 9 AM Monday-Friday
+    )
+    ```
+  </Tab>
+</Tabs>
+
+### First day of month
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const config = step({
+      name: 'monthly-invoice',
+      triggers: [cron('0 0 1 * *')], // Midnight on the 1st
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    config = step(
+        name='monthly-invoice',
+        triggers=[cron('0 0 1 * *')],  # Midnight on the 1st
+    )
+    ```
+  </Tab>
+</Tabs>
+
+### Every 15 minutes
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const config = step({
+      name: 'frequent-poll',
+      triggers: [cron('*/15 * * * *')],
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    config = step(
+        name='frequent-poll',
+        triggers=[cron('*/15 * * * *')],
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Conditional execution
+
+Use conditions to skip executions based on runtime logic:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, cron } from 'motia'
+
+    export const config = step({
+      name: 'conditional-task',
+      triggers: [
+        cron('0 * * * *', async (input, ctx) => {
+          const hour = new Date().getHours()
+          // Only run during business hours
+          return hour >= 9 && hour <= 17
+        }),
+      ],
+    })
+
+    export const handler = async (input, ctx) => {
+      ctx.logger.info('Running during business hours')
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, cron
+    from datetime import datetime
+
+    async def business_hours_condition(input, ctx):
+        hour = datetime.now().hour
+        # Only run during business hours
+        return 9 <= hour <= 17
+
+    config = step(
+        name='conditional-task',
+        triggers=[
+            cron('0 * * * *', condition=business_hours_condition),
+        ],
+    )
+
+    async def handler(input, ctx):
+        ctx.logger.info('Running during business hours')
+    ```
+  </Tab>
+</Tabs>
+
+## Enqueuing from cron
+
+Trigger async workflows from scheduled jobs:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, cron } from 'motia'
+
+    export const config = step({
+      name: 'schedule-reports',
+      triggers: [cron('0 6 * * *')], // 6 AM daily
+      enqueues: ['generate-report'],
+    })
+
+    export const handler = async (input, ctx) => {
+      const users = await getActiveUsers()
+      
+      for (const user of users) {
+        await ctx.enqueue({
+          topic: 'generate-report',
+          data: { userId: user.id },
+        })
+      }
+      
+      ctx.logger.info('Queued reports', { count: users.length })
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, cron
+
+    config = step(
+        name='schedule-reports',
+        triggers=[cron('0 6 * * *')],  # 6 AM daily
+        enqueues=['generate-report'],
+    )
+
+    async def handler(input, ctx):
+        users = await get_active_users()
+        
+        for user in users:
+            await ctx.enqueue({
+                'topic': 'generate-report',
+                'data': {'userId': user['id']},
+            })
+        
+        ctx.logger.info('Queued reports', {'count': len(users)})
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration options
+
+<ParamField path="expression" type="string" required>
+  Standard cron expression with five fields:
+  - Minute (0-59)
+  - Hour (0-23)
+  - Day of month (1-31)
+  - Month (1-12)
+  - Day of week (0-6, Sunday-Saturday)
+  
+  Supports:
+  - `*` for any value
+  - `,` for lists (e.g., `1,15,30`)
+  - `-` for ranges (e.g., `1-5`)
+  - `/` for steps (e.g., `*/15`)
+</ParamField>
+
+<ParamField path="condition" type="function">
+  Optional function `(input, ctx) => boolean` to conditionally execute the handler
+</ParamField>
+
+## Use cases
+
+### Daily data sync
+
+Sync data from external systems:
+
+```typescript
+import { step, cron } from 'motia'
+
+export const config = step({
+  name: 'sync-users',
+  triggers: [cron('0 3 * * *')], // 3 AM daily
+})
+
+export const handler = async (input, ctx) => {
+  ctx.logger.info('Starting user sync')
+  
+  const externalUsers = await fetchExternalUsers()
+  const updates = await syncToDatabase(externalUsers)
+  
+  ctx.logger.info('User sync complete', {
+    fetched: externalUsers.length,
+    updated: updates.length,
+  })
+}
+```
+
+### Weekly cleanup
+
+Clean up old data:
+
+```typescript
+import { step, cron } from 'motia'
+
+export const config = step({
+  name: 'cleanup-old-data',
+  triggers: [cron('0 0 * * 0')], // Sunday midnight
+})
+
+export const handler = async (input, ctx) => {
+  const thirtyDaysAgo = new Date()
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+  
+  const deleted = await deleteOldRecords(thirtyDaysAgo)
+  
+  ctx.logger.info('Cleanup complete', { deleted })
+}
+```
+
+### Monitoring and alerts
+
+Regular health checks:
+
+```typescript
+import { step, cron } from 'motia'
+
+export const config = step({
+  name: 'system-monitor',
+  triggers: [cron('*/5 * * * *')], // Every 5 minutes
+})
+
+export const handler = async (input, ctx) => {
+  const metrics = await collectMetrics()
+  
+  if (metrics.errorRate > 0.05) {
+    ctx.logger.error('High error rate detected', {
+      errorRate: metrics.errorRate,
+    })
+    
+    await sendAlert('High error rate', metrics)
+  }
+}
+```
+
+### Report generation
+
+Generate periodic reports:
+
+```typescript
+import { step, cron } from 'motia'
+
+export const config = step({
+  name: 'weekly-analytics',
+  triggers: [cron('0 8 * * 1')], // Monday 8 AM
+})
+
+export const handler = async (input, ctx) => {
+  const startDate = getLastWeekStart()
+  const endDate = getLastWeekEnd()
+  
+  const analytics = await generateAnalytics(startDate, endDate)
+  const report = await formatReport(analytics)
+  
+  await sendReport(report)
+  
+  ctx.logger.info('Weekly report sent')
+}
+```
+
+### Cache warming
+
+Pre-populate caches:
+
+```typescript
+import { step, cron } from 'motia'
+
+export const config = step({
+  name: 'warm-cache',
+  triggers: [cron('0 */6 * * *')], // Every 6 hours
+})
+
+export const handler = async (input, ctx) => {
+  const popularItems = await getPopularItems()
+  
+  for (const item of popularItems) {
+    await cacheItem(item)
+  }
+  
+  ctx.logger.info('Cache warmed', { items: popularItems.length })
+}
+```

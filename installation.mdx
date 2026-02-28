@@ -1,0 +1,290 @@
+---
+title: Installation
+description: Install the Motia CLI and iii engine to start building backend applications.
+---
+
+# Installation
+
+This guide covers installing the Motia CLI and iii engine, the two components you need to build Motia applications.
+
+## Prerequisites
+
+<Tabs>
+  <Tab title="TypeScript/JavaScript">
+    - **Node.js 18+** — Required for TypeScript and JavaScript Steps
+    - **npm**, **yarn**, or **pnpm** — Package manager of your choice
+  </Tab>
+  <Tab title="Python">
+    - **Python 3.10+** — Required for Python Steps
+    - **pip** — Python package manager
+  </Tab>
+</Tabs>
+
+## Install the Motia CLI
+
+The Motia CLI helps you create new projects and manage your Motia applications.
+
+<CodeGroup>
+  ```bash Homebrew (macOS/Linux)
+  brew tap MotiaDev/tap
+  brew install motia-cli
+  ```
+
+  ```bash Shell script (macOS/Linux)
+  curl -fsSL https://raw.githubusercontent.com/MotiaDev/motia-cli/main/install.sh | sh
+  ```
+
+  ```bash Manual installation
+  # Download from GitHub releases
+  # https://github.com/MotiaDev/motia-cli/releases
+  ```
+</CodeGroup>
+
+Verify the installation:
+
+```bash
+motia-cli --version
+```
+
+## Install the iii engine
+
+The iii engine is the Rust-based runtime that powers Motia. It manages queues, state, streams, cron, and observability.
+
+<Note>
+The Motia CLI will automatically install the iii engine when you create a new project if it's not already installed.
+</Note>
+
+To install manually:
+
+<CodeGroup>
+  ```bash Homebrew (macOS/Linux)
+  brew tap iii-dev/tap
+  brew install iii
+  ```
+
+  ```bash Shell script (macOS/Linux)
+  curl -fsSL https://iii.dev/install.sh | sh
+  ```
+</CodeGroup>
+
+Verify the installation:
+
+```bash
+iii --version
+```
+
+## Install Motia packages
+
+After creating a project with `motia-cli create`, you'll need to install the Motia SDK packages.
+
+<Tabs>
+  <Tab title="TypeScript/JavaScript">
+    <CodeGroup>
+      ```bash npm
+      npm install motia
+      ```
+
+      ```bash yarn
+      yarn add motia
+      ```
+
+      ```bash pnpm
+      pnpm add motia
+      ```
+    </CodeGroup>
+
+    ### Optional: Stream client packages
+
+    For client-side streaming (browser or Node.js):
+
+    <CodeGroup>
+      ```bash npm (Browser)
+      npm install @motiadev/stream-client-browser
+      ```
+
+      ```bash npm (Node.js)
+      npm install @motiadev/stream-client-node
+      ```
+
+      ```bash npm (React)
+      npm install @motiadev/stream-client-react
+      ```
+    </CodeGroup>
+  </Tab>
+
+  <Tab title="Python">
+    ```bash
+    pip install motia
+    ```
+
+    Or with poetry:
+
+    ```bash
+    poetry add motia
+    ```
+
+    ### Optional: OpenTelemetry support
+
+    For observability with OpenTelemetry:
+
+    ```bash
+    pip install motia[otel]
+    ```
+  </Tab>
+</Tabs>
+
+## Create your first project
+
+Now that you have the CLI and iii engine installed, create your first project:
+
+```bash
+motia-cli create my-app
+cd my-app
+```
+
+The CLI will:
+1. Prompt you to choose a language (TypeScript, JavaScript, or Python)
+2. Prompt you to select a template (basic, api, or full-stack)
+3. Generate project files and configuration
+4. Install dependencies
+5. Create an `iii-config.yaml` configuration file
+
+## Start the iii engine
+
+Start the iii engine to run your Motia application:
+
+```bash
+iii -c iii-config.yaml
+```
+
+The iii engine will:
+- Start the HTTP server (default: `http://localhost:3111`)
+- Start the WebSocket server for streams (default: `ws://localhost:3112`)
+- Start the iii Console (default: `http://localhost:3113`)
+- Auto-discover and register your Steps
+- Set up queues, state, and observability
+
+<Tip>
+Visit the iii Console at `http://localhost:3113` to monitor your application, view traces, and debug issues.
+</Tip>
+
+## Development workflow
+
+<Tabs>
+  <Tab title="TypeScript/JavaScript">
+    For development with hot reloading:
+
+    ```bash
+    # Terminal 1: Start iii engine
+    iii -c iii-config.yaml
+
+    # Terminal 2: Watch TypeScript files
+    npm run dev
+    # or
+    motia dev
+    ```
+
+    The `motia dev` command will:
+    - Watch your Step files for changes
+    - Rebuild automatically with esbuild
+    - The iii engine will hot-reload your Steps
+  </Tab>
+
+  <Tab title="Python">
+    For development with auto-reload:
+
+    ```bash
+    # Terminal 1: Start iii engine
+    iii -c iii-config.yaml
+
+    # Terminal 2: Watch Python files (optional)
+    motia run --watch
+    ```
+
+    The iii engine automatically reloads Python Steps when files change.
+  </Tab>
+</Tabs>
+
+## Verify installation
+
+Test that everything is working:
+
+```bash
+curl http://localhost:3111/health
+```
+
+You should see a health check response from the iii engine.
+
+## Troubleshooting
+
+<Accordion title="iii engine not found">
+If the iii engine is not found, try:
+
+1. Install it manually:
+   ```bash
+   brew install iii-dev/tap/iii
+   # or
+   curl -fsSL https://iii.dev/install.sh | sh
+   ```
+
+2. Add it to your PATH:
+   ```bash
+   export PATH="$HOME/.iii/bin:$PATH"
+   ```
+</Accordion>
+
+<Accordion title="Port already in use">
+If ports 3111, 3112, or 3113 are already in use, you can change them in `iii-config.yaml`:
+
+```yaml
+modules:
+  - class: modules::api::RestApiModule
+    config:
+      port: 3111  # Change this
+
+  - class: modules::stream::StreamModule
+    config:
+      port: 3112  # Change this
+```
+</Accordion>
+
+<Accordion title="Node.js version too old">
+Motia requires Node.js 18 or higher. Update Node.js:
+
+```bash
+# Using nvm
+nvm install 18
+nvm use 18
+
+# Or download from https://nodejs.org
+```
+</Accordion>
+
+<Accordion title="Python version too old">
+Motia requires Python 3.10 or higher. Update Python:
+
+```bash
+# Using pyenv
+pyenv install 3.12
+pyenv global 3.12
+
+# Or download from https://python.org
+```
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first Motia app in under 60 seconds
+  </Card>
+  <Card title="Core concepts" icon="book" href="/concepts/steps">
+    Learn about Steps, triggers, and handlers
+  </Card>
+  <Card title="Configuration" icon="gear" href="/advanced/configuration">
+    Configure the iii engine for your needs
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/hello-world">
+    Explore real-world examples
+  </Card>
+</CardGroup>

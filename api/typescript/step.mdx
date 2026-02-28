@@ -1,0 +1,258 @@
+---
+title: step() function
+description: Define workflow steps with type-safe configuration and handlers
+---
+
+## step()
+
+The `step()` function is the primary way to define workflow steps in Motia. It provides type-safe configuration and handler definition with full TypeScript inference.
+
+### Signature
+
+```typescript
+function step<TConfig extends StepConfig>(
+  config: TConfig,
+  handler: Handlers<TConfig>
+): StepDefinition<TConfig>
+
+function step<TConfig extends StepConfig>(
+  config: TConfig
+): StepBuilder<TConfig>
+```
+
+### Parameters
+
+<ParamField path="config" type="StepConfig" required>
+  Step configuration object defining the step's behavior
+  
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      Unique name for the step
+    </ParamField>
+    
+    <ParamField path="description" type="string">
+      Human-readable description of what the step does
+    </ParamField>
+    
+    <ParamField path="triggers" type="TriggerConfig[]" required>
+      Array of trigger configurations that invoke this step. See [Triggers](/api/typescript/triggers)
+    </ParamField>
+    
+    <ParamField path="enqueues" type="Enqueue[]">
+      Topics this step can enqueue to. Each can be a string or object with `topic`, `label`, and `conditional` properties
+    </ParamField>
+    
+    <ParamField path="flows" type="string[]">
+      Flow names this step belongs to for organization and filtering
+    </ParamField>
+    
+    <ParamField path="includeFiles" type="string[]">
+      Additional files to include in the deployment bundle
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="handler" type="Handlers<TConfig>">
+  Handler function that processes trigger inputs. If omitted, returns a builder with a `.handle()` method
+</ParamField>
+
+### Return type
+
+<ResponseField name="config" type="TConfig">
+  The step configuration
+</ResponseField>
+
+<ResponseField name="handler" type="Handlers<TConfig>">
+  The handler function
+</ResponseField>
+
+## Usage
+
+### Direct definition
+
+Define a step with config and handler in one call:
+
+```typescript
+import { step, queue } from 'motia'
+import { z } from 'zod'
+
+const orderSchema = z.object({
+  email: z.string(),
+  quantity: z.number(),
+  petId: z.string(),
+})
+
+export const { config, handler } = step(
+  {
+    name: 'ProcessFoodOrder',
+    description: 'Process incoming food orders',
+    triggers: [queue('process-food-order', { input: orderSchema })],
+    enqueues: ['notification'],
+  },
+  async (input, ctx) => {
+    ctx.logger.info('Processing order', { input })
+    
+    const order = await createOrder(input)
+    await ctx.state.set('orders', order.id, order)
+    
+    await ctx.enqueue({
+      topic: 'notification',
+      data: { email: input.email, orderId: order.id },
+    })
+  }
+)
+```
+
+### Builder pattern
+
+Separate config from handler using the builder:
+
+```typescript
+import { step, http } from 'motia'
+import { z } from 'zod'
+
+const stepConfig = {
+  name: 'CreatePet',
+  triggers: [
+    http('POST', '/pets', {
+      bodySchema: z.object({
+        name: z.string(),
+        photoUrl: z.string(),
+      }),
+      responseSchema: {
+        200: z.object({ id: z.string(), name: z.string() }),
+      },
+    }),
+  ],
+}
+
+export const { config, handler } = step(stepConfig).handle(async (request, ctx) => {
+  const pet = await createPet(request.body)
+  
+  return {
+    status: 200,
+    body: pet,
+  }
+})
+```
+
+### Multiple triggers
+
+Steps can respond to multiple trigger types:
+
+```typescript
+import { step, http, queue } from 'motia'
+import { z } from 'zod'
+
+const dataSchema = z.object({
+  userId: z.string(),
+  action: z.string(),
+})
+
+export const { config, handler } = step(
+  {
+    name: 'ProcessAction',
+    triggers: [
+      queue('user-actions', { input: dataSchema }),
+      http('POST', '/actions', { bodySchema: dataSchema }),
+    ],
+  },
+  async (input, ctx) => {
+    // Use getData() to get the payload regardless of trigger type
+    const data = ctx.getData()
+    
+    await processAction(data)
+    
+    // Return response only for HTTP triggers
+    return ctx.match({
+      http: async () => ({ status: 200, body: { success: true } }),
+    })
+  }
+)
+```
+
+### Cron triggers
+
+Scheduled tasks using cron expressions:
+
+```typescript
+import { step, cron } from 'motia'
+
+export const { config, handler } = step(
+  {
+    name: 'DailyCleanup',
+    description: 'Clean up old records daily',
+    triggers: [cron('0 0 * * *')], // Every day at midnight
+  },
+  async (_input, ctx) => {
+    ctx.logger.info('Running daily cleanup')
+    await cleanupOldRecords()
+  }
+)
+```
+
+### State triggers
+
+React to state changes:
+
+```typescript
+import { step, state } from 'motia'
+import type { StateTriggerInput } from 'motia'
+
+export const { config, handler } = step(
+  {
+    name: 'OnOrderUpdate',
+    triggers: [
+      state((input: StateTriggerInput<Order>) => {
+        return input.group_id === 'orders' && input.new_value?.status === 'shipped'
+      }),
+    ],
+  },
+  async (input, ctx) => {
+    ctx.logger.info('Order shipped', {
+      orderId: input.item_id,
+      newValue: input.new_value,
+    })
+  }
+)
+```
+
+## Type inference
+
+The `step()` function provides full TypeScript inference for:
+
+- Handler input types based on trigger schemas
+- Context enqueue data types based on configured topics
+- Response types for HTTP triggers
+- Trigger-specific type guards with `ctx.is` and `ctx.match`
+
+```typescript
+// Input type is inferred from bodySchema
+const { config, handler } = step(
+  {
+    name: 'Example',
+    triggers: [
+      http('POST', '/example', {
+        bodySchema: z.object({ name: z.string() }),
+      }),
+    ],
+    enqueues: ['notifications'],
+  },
+  async (request, ctx) => {
+    // TypeScript knows request.body has { name: string }
+    const name = request.body.name
+    
+    // TypeScript knows enqueue requires notifications topic
+    await ctx.enqueue({
+      topic: 'notifications', // type-checked
+      data: { message: `Hello ${name}` },
+    })
+  }
+)
+```
+
+## Related
+
+- [Triggers](/api/typescript/triggers) - Configure step triggers
+- [FlowContext](/api/typescript/context) - Access context in handlers
+- [Core types](/api/typescript/types) - TypeScript type definitions

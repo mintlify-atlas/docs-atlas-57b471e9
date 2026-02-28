@@ -1,80 +1,275 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get a Motia project up and running in under 60 seconds.
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
+Get started with Motia in under 60 seconds. This guide will help you create your first Motia application with HTTP endpoints and background jobs.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- **Node.js 18+** — for TypeScript/JavaScript Steps
+- **Python 3.10+** — optional, for Python Steps
 
-### Step 2: Deploy your changes
+## Installation
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Steps>
+  <Step title="Install the Motia CLI">
+    <CodeGroup>
+      ```bash Homebrew
+      brew tap MotiaDev/tap
+      brew install motia-cli
+      ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+      ```bash Shell script
+      curl -fsSL https://raw.githubusercontent.com/MotiaDev/motia-cli/main/install.sh | sh
+      ```
+    </CodeGroup>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    The CLI will automatically detect and install the **iii engine** if it's not already on your system.
+  </Step>
 
-### Step 3: Go live
+  <Step title="Create a new project">
+    ```bash
+    motia-cli create my-app
+    cd my-app
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    The CLI will prompt you to:
+    - Choose a language (TypeScript, JavaScript, or Python)
+    - Select a template (basic, api, or full-stack)
+  </Step>
+
+  <Step title="Start the iii engine">
+    ```bash
+    iii -c iii-config.yaml
+    ```
+
+    This starts the Rust-based runtime that manages your APIs, queues, state, streams, and cron jobs.
+
+    <Tip>
+    The iii Console will be available at `http://localhost:3113` for monitoring and debugging.
+    </Tip>
+  </Step>
+</Steps>
+
+## Your first Step
+
+Let's create a simple HTTP endpoint that returns a greeting.
+
+<Tabs>
+  <Tab title="TypeScript">
+    Create `steps/hello.step.ts`:
+
+    ```ts steps/hello.step.ts
+    export const config = {
+      name: 'Hello',
+      triggers: [
+        {
+          type: 'http',
+          method: 'GET',
+          path: '/hello',
+        }
+      ],
+    };
+
+    export const handler = async (req, ctx) => {
+      const name = req.queryParams.name || 'World';
+      return {
+        status: 200,
+        body: { message: `Hello, ${name}!` }
+      };
+    };
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    Create `steps/hello_step.py`:
+
+    ```python steps/hello_step.py
+    config = {
+        "name": "Hello",
+        "triggers": [
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/hello",
+            }
+        ],
+    }
+
+    async def handler(req, ctx):
+        name = req.query_params.get("name", "World")
+        return {
+            "status": 200,
+            "body": {"message": f"Hello, {name}!"}
+        }
+    ```
+  </Tab>
+</Tabs>
+
+## Test your endpoint
+
+With the iii engine running, test your endpoint:
+
+```bash
+curl http://localhost:3111/hello?name=Motia
+```
+
+You should see:
+
+```json
+{
+  "message": "Hello, Motia!"
+}
+```
+
+## Add a background job
+
+Now let's add a queue-based background job that processes messages asynchronously.
+
+<Tabs>
+  <Tab title="TypeScript">
+    Create `steps/process-message.step.ts`:
+
+    ```ts steps/process-message.step.ts
+    export const config = {
+      name: 'ProcessMessage',
+      triggers: [
+        {
+          type: 'queue',
+          topic: 'message.sent',
+        }
+      ],
+    };
+
+    export const handler = async (input, { logger }) => {
+      logger.info('Processing message', input);
+      // Process the message here
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      logger.info('Message processed successfully');
+    };
+    ```
+
+    Update `steps/hello.step.ts` to enqueue messages:
+
+    ```ts steps/hello.step.ts
+    export const config = {
+      name: 'Hello',
+      triggers: [
+        {
+          type: 'http',
+          method: 'GET',
+          path: '/hello',
+        }
+      ],
+      enqueues: ['message.sent'] // Add this line
+    };
+
+    export const handler = async (req, { enqueue }) => {
+      const name = req.queryParams.name || 'World';
+
+      // Enqueue a background job
+      await enqueue({
+        topic: 'message.sent',
+        data: { name, timestamp: new Date().toISOString() }
+      });
+
+      return {
+        status: 200,
+        body: { message: `Hello, ${name}!` }
+      };
+    };
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    Create `steps/process_message_step.py`:
+
+    ```python steps/process_message_step.py
+    import asyncio
+
+    config = {
+        "name": "ProcessMessage",
+        "triggers": [
+            {
+                "type": "queue",
+                "topic": "message.sent",
+            }
+        ],
+    }
+
+    async def handler(input, ctx):
+        ctx.logger.info("Processing message", input)
+        # Process the message here
+        await asyncio.sleep(1)
+        ctx.logger.info("Message processed successfully")
+    ```
+
+    Update `steps/hello_step.py` to enqueue messages:
+
+    ```python steps/hello_step.py
+    from datetime import datetime
+
+    config = {
+        "name": "Hello",
+        "triggers": [
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/hello",
+            }
+        ],
+        "enqueues": ["message.sent"]  # Add this line
+    }
+
+    async def handler(req, ctx):
+        name = req.query_params.get("name", "World")
+
+        # Enqueue a background job
+        await ctx.enqueue({
+            "topic": "message.sent",
+            "data": {"name": name, "timestamp": datetime.now().isoformat()}
+        })
+
+        return {
+            "status": 200,
+            "body": {"message": f"Hello, {name}!"}
+        }
+    ```
+  </Tab>
+</Tabs>
+
+Now when you call the endpoint, it will enqueue a background job that processes asynchronously:
+
+```bash
+curl http://localhost:3111/hello?name=Motia
+```
+
+Check the iii Console at `http://localhost:3113` to see the background job being processed.
+
+## What you've learned
+
+✅ How to install the Motia CLI and iii engine  
+✅ How to create a new Motia project  
+✅ How to create HTTP endpoints with Steps  
+✅ How to add background jobs with queue triggers  
+✅ How to enqueue messages from HTTP handlers  
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core concepts" icon="book" href="/concepts/steps">
+    Learn about Steps, triggers, and handlers in depth
+  </Card>
+  <Card title="Building APIs" icon="globe" href="/guides/building-apis">
+    Build production-ready REST APIs with validation
+  </Card>
+  <Card title="Background jobs" icon="list-check" href="/guides/background-jobs">
+    Master background job patterns and workflows
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/hello-world">
+    Explore more real-world examples
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

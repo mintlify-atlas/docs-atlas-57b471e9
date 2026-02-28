@@ -1,0 +1,494 @@
+---
+title: Observability
+description: Monitor and debug Motia applications with distributed tracing, metrics, and structured logging
+---
+
+Motia provides built-in observability through the **OpenTelemetry (OTel) module** in the iii engine. Every request, queue message, and cron job generates a trace with spans, logs, and metrics.
+
+## Overview
+
+Motia's observability stack includes:
+
+- **Distributed tracing**: End-to-end visibility across steps and triggers
+- **Structured logging**: JSON logs correlated with traces
+- **Metrics**: Request counts, latencies, error rates
+- **iii Console**: Web-based UI for exploring traces and logs
+
+## Configuration
+
+The OTel module is configured in `config.yaml`:
+
+```yaml
+modules:
+  - class: modules::observability::OtelModule
+    config:
+      enabled: true
+      service_name: motia-app
+      service_version: 1.0.0
+      service_namespace: production
+      
+      # Traces
+      exporter: memory  # Options: memory, otlp
+      endpoint: http://localhost:4317
+      sampling_ratio: 1.0
+      memory_max_spans: 10000
+      
+      # Metrics
+      metrics_enabled: true
+      metrics_exporter: memory
+      metrics_retention_seconds: 3600
+      metrics_max_count: 10000
+      
+      # Logs
+      logs_enabled: true
+      logs_exporter: memory
+      logs_max_count: 1000
+      logs_retention_seconds: 3600
+      logs_sampling_ratio: 1.0
+```
+
+### Memory exporter
+
+The `memory` exporter stores traces, metrics, and logs in memory for access via the iii Console. This is ideal for development and testing.
+
+**Pros**:
+- No external dependencies
+- Fast and simple
+- Built-in visualization
+
+**Cons**:
+- Limited retention (configurable max spans/logs)
+- Data lost on engine restart
+- Not suitable for production at scale
+
+### OTLP exporter
+
+The `otlp` exporter sends telemetry to an OpenTelemetry Collector or compatible backend (Jaeger, Grafana Tempo, Honeycomb, etc.).
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    enabled: true
+    service_name: motia-app
+    exporter: otlp
+    endpoint: http://otel-collector:4317
+    sampling_ratio: 0.1  # Sample 10% of traces
+```
+
+**Pros**:
+- Persistent storage
+- Scalable for high-volume production
+- Integration with existing observability platforms
+
+**Cons**:
+- Requires external infrastructure
+- More complex setup
+
+## Distributed tracing
+
+Every execution generates a trace with spans for each step, trigger, and operation:
+
+```
+Trace ID: 1a2b3c4d5e6f7g8h
+├─ Span: HTTP POST /orders (15ms)
+│  ├─ Span: CreateOrder handler (12ms)
+│  │  ├─ Span: state.get (1ms)
+│  │  ├─ Span: state.set (2ms)
+│  │  └─ Span: enqueue (1ms)
+│  └─ Span: Queue publish (2ms)
+└─ Span: Queue consume process-order (50ms)
+   └─ Span: ProcessOrder handler (48ms)
+      ├─ Span: state.get (1ms)
+      ├─ Span: External API call (40ms)
+      └─ Span: state.update (2ms)
+```
+
+### Trace context
+
+All operations within a trace share the same `traceId`:
+
+```typescript
+export const handler: Handlers<typeof config> = async (input, ctx) => {
+  ctx.logger.info('Processing order', {
+    traceId: ctx.traceId,  // e.g., "1a2b3c4d5e6f7g8h"
+    orderId: input.orderId,
+  })
+  
+  // All state operations, enqueues, and logs are tagged with this traceId
+  await ctx.state.set('orders', input.orderId, { status: 'processing' })
+  await ctx.enqueue({ topic: 'order-processed', data: input })
+}
+```
+
+### Trace propagation
+
+Traces propagate across steps via queue messages:
+
+```typescript
+// Step 1: Create order
+export const createOrder = step(
+  {
+    name: 'CreateOrder',
+    triggers: [http('POST', '/orders')],
+    enqueues: ['process-order'],
+  },
+  async (input, ctx) => {
+    ctx.logger.info('Creating order', { traceId: ctx.traceId })
+    
+    // Enqueue message with trace context
+    await ctx.enqueue({
+      topic: 'process-order',
+      data: { orderId: '123' },
+    })
+    
+    return { status: 202, body: { accepted: true } }
+  },
+)
+
+// Step 2: Process order (same trace)
+export const processOrder = step(
+  {
+    name: 'ProcessOrder',
+    triggers: [queue('process-order')],
+  },
+  async (input, ctx) => {
+    // Same traceId as createOrder!
+    ctx.logger.info('Processing order', { traceId: ctx.traceId })
+  },
+)
+```
+
+The iii Console shows the full trace across both steps.
+
+## Structured logging
+
+Use `ctx.logger` for structured logging:
+
+```typescript
+export const handler: Handlers<typeof config> = async (input, ctx) => {
+  ctx.logger.info('Starting order processing', {
+    orderId: input.orderId,
+    userId: input.userId,
+  })
+  
+  try {
+    const result = await processOrder(input)
+    
+    ctx.logger.info('Order processed successfully', {
+      orderId: input.orderId,
+      totalAmount: result.amount,
+    })
+    
+    return { status: 200, body: result }
+  } catch (error) {
+    ctx.logger.error('Order processing failed', {
+      orderId: input.orderId,
+      error: error.message,
+      stack: error.stack,
+    })
+    
+    throw error
+  }
+}
+```
+
+### Log levels
+
+```typescript
+ctx.logger.debug('Debugging info', { details: '...' })
+ctx.logger.info('Informational message', { status: 'ok' })
+ctx.logger.warn('Warning message', { issue: 'Something unusual' })
+ctx.logger.error('Error message', { error: 'Failed to connect' })
+```
+
+### Log structure
+
+Logs are JSON objects with standard fields:
+
+```json
+{
+  "timestamp": "2026-02-28T10:30:45.123Z",
+  "level": "info",
+  "message": "Order processed successfully",
+  "traceId": "1a2b3c4d5e6f7g8h",
+  "spanId": "9i0j1k2l3m4n",
+  "service": "motia-app",
+  "stepName": "ProcessOrder",
+  "orderId": "order-123",
+  "totalAmount": 99.99
+}
+```
+
+You can search and filter logs by any field in the iii Console.
+
+### External logger integration
+
+The `ctx.logger` is provided by the iii SDK and automatically correlated with traces. To integrate with external loggers (Winston, Pino, etc.), access the underlying logger:
+
+```typescript
+import { getContext } from 'motia'
+
+export const handler: Handlers<typeof config> = async (input, ctx) => {
+  const { logger, trace } = getContext()
+  
+  // logger is the native iii-sdk Logger
+  logger.info('Using iii logger', { foo: 'bar' })
+  
+  // trace is the OpenTelemetry span
+  const traceId = trace?.spanContext().traceId
+}
+```
+
+## Metrics
+
+The OTel module automatically collects metrics:
+
+### Request metrics
+
+- `http.server.request.duration`: Histogram of HTTP request latencies
+- `http.server.request.count`: Counter of HTTP requests by status code
+- `http.server.active_requests`: Gauge of concurrent requests
+
+### Queue metrics
+
+- `queue.message.duration`: Histogram of message processing latencies
+- `queue.message.count`: Counter of processed messages
+- `queue.message.retries`: Counter of retry attempts
+
+### State metrics
+
+- `state.operation.duration`: Histogram of state operation latencies
+- `state.operation.count`: Counter of state operations by type (get/set/update/delete)
+
+### Custom metrics
+
+To emit custom metrics, use the OpenTelemetry API directly:
+
+```typescript
+import { getContext } from 'motia'
+import { metrics } from '@opentelemetry/api'
+
+const meter = metrics.getMeter('motia-app')
+const orderCounter = meter.createCounter('orders.created', {
+  description: 'Number of orders created',
+})
+
+export const handler: Handlers<typeof config> = async (input, ctx) => {
+  // Process order...
+  
+  orderCounter.add(1, {
+    userId: input.userId,
+    status: 'success',
+  })
+}
+```
+
+## iii Console
+
+The iii Console is a web-based UI for exploring traces, logs, and metrics:
+
+```bash
+iii  # Start the engine
+```
+
+Open your browser to `http://localhost:3113` (default port).
+
+### Features
+
+- **Flows**: Visualize how steps connect via triggers and enqueues
+- **Endpoints**: Test HTTP endpoints with live request/response
+- **Traces**: Explore end-to-end traces with span timelines
+- **Logs**: Search and filter logs by trace, step, level, or custom fields
+- **State**: Inspect key-value store contents by group
+- **Streams**: Monitor active stream connections and events
+
+### Trace explorer
+
+Click on any trace to see:
+
+- **Timeline**: Visual representation of spans and their durations
+- **Spans**: Hierarchical list of operations (HTTP, queue, state, etc.)
+- **Logs**: All logs associated with this trace
+- **Context**: Trace ID, service name, step names
+
+This makes debugging distributed workflows much easier.
+
+## Production setup
+
+For production, use the OTLP exporter with an external observability platform:
+
+### Jaeger
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    enabled: true
+    service_name: motia-app
+    exporter: otlp
+    endpoint: http://jaeger-collector:4317
+    sampling_ratio: 0.1
+```
+
+Run Jaeger:
+
+```bash
+docker run -d --name jaeger \
+  -p 4317:4317 \
+  -p 16686:16686 \
+  jaegertracing/all-in-one:latest
+```
+
+Access the Jaeger UI at `http://localhost:16686`.
+
+### Grafana Tempo
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    enabled: true
+    service_name: motia-app
+    exporter: otlp
+    endpoint: http://tempo:4317
+    sampling_ratio: 1.0
+```
+
+Configure Tempo with Grafana for trace visualization.
+
+### Honeycomb
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    enabled: true
+    service_name: motia-app
+    exporter: otlp
+    endpoint: https://api.honeycomb.io:443
+    sampling_ratio: 1.0
+```
+
+Set the `X-Honeycomb-Team` header with your API key (requires custom configuration).
+
+## Sampling strategies
+
+### Head-based sampling
+
+Decide at the start of a trace whether to record it:
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    sampling_ratio: 0.1  # Sample 10% of traces
+```
+
+**Use cases**:
+- High-volume production (reduce storage costs)
+- Known traffic patterns
+
+### Tail-based sampling
+
+Decide after the trace completes (e.g., always record errors):
+
+<Warning>
+  Tail-based sampling is not yet supported by the iii engine. Use head-based sampling or configure your OTLP collector for tail-based sampling.
+</Warning>
+
+## Best practices
+
+### 1. Use structured logging
+
+Always log structured data, not strings:
+
+```typescript
+// ✅ Good
+ctx.logger.info('Order created', { orderId: '123', userId: 'user-456' })
+
+// ❌ Bad
+ctx.logger.info(`Order 123 created by user-456`)
+```
+
+### 2. Include context in logs
+
+Add relevant business context:
+
+```typescript
+ctx.logger.info('Payment processed', {
+  orderId: input.orderId,
+  userId: input.userId,
+  amount: input.amount,
+  currency: input.currency,
+  paymentMethod: input.paymentMethod,
+})
+```
+
+### 3. Log errors with stack traces
+
+```typescript
+try {
+  await processOrder(input)
+} catch (error) {
+  ctx.logger.error('Order processing failed', {
+    orderId: input.orderId,
+    error: error.message,
+    stack: error.stack,
+  })
+  throw error
+}
+```
+
+### 4. Use appropriate log levels
+
+- `debug`: Verbose debugging info (disabled in production)
+- `info`: Normal operational events
+- `warn`: Unusual but non-critical events
+- `error`: Errors that need attention
+
+### 5. Sample high-volume traces
+
+For endpoints with millions of requests:
+
+```yaml
+sampling_ratio: 0.01  # Sample 1%
+```
+
+Or use conditional sampling based on headers:
+
+```typescript
+const shouldTrace = req.request.headers['x-trace'] === 'true'
+// Implementation depends on OTel SDK features
+```
+
+## Troubleshooting
+
+### Traces not appearing
+
+1. Check that `enabled: true` in `config.yaml`
+2. Verify the exporter type (`memory` or `otlp`)
+3. For OTLP, check the endpoint URL and network connectivity
+4. Check the iii engine logs for errors
+
+### High memory usage
+
+With the `memory` exporter:
+
+1. Reduce `memory_max_spans`
+2. Reduce `logs_max_count`
+3. Lower `logs_retention_seconds` and `metrics_retention_seconds`
+4. Consider switching to OTLP exporter
+
+### Missing logs in traces
+
+Ensure you're using `ctx.logger`, not `console.log`:
+
+```typescript
+// ✅ Good (correlated with trace)
+ctx.logger.info('Message', { data })
+
+// ❌ Bad (not correlated)
+console.log('Message', data)
+```
+
+## Next steps
+
+- Configure [deployment](/advanced/deployment)
+- Implement [testing](/advanced/testing)
+- Learn about [middleware](/advanced/middleware)

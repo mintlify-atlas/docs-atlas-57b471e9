@@ -1,0 +1,199 @@
+---
+title: Hello world
+description: Build your first Motia app with HTTP and queue triggers in under 5 minutes
+---
+
+This tutorial walks you through building a simple "Hello World" app that demonstrates Motia's core concepts: HTTP endpoints, queue-based processing, and state management.
+
+## What you'll build
+
+A two-step application that:
+- Accepts HTTP requests at `/hello`
+- Enqueues messages for background processing
+- Stores results in state
+- Logs processing details
+
+## Prerequisites
+
+- Node.js 18+ installed
+- Motia CLI installed ([installation guide](/quickstart))
+- A new Motia project created
+
+## Step 1: Create the HTTP endpoint
+
+Create a file `steps/hello-api.step.ts` that receives requests and enqueues them for processing:
+
+```typescript steps/hello-api.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+
+export const config = {
+  name: 'HelloAPI',
+  description: 'Receives hello request and enqueues event for processing',
+  triggers: [
+    {
+      type: 'http',
+      path: '/hello',
+      method: 'GET',
+      responseSchema: {
+        200: z.object({
+          message: z.string(),
+          status: z.string(),
+          appName: z.string(),
+        }),
+      },
+    },
+  ],
+  enqueues: ['process-greeting'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (_, { enqueue, logger }) => {
+  const appName = 'My First App'
+  const timestamp = new Date().toISOString()
+
+  logger.info('Hello API endpoint called', { appName, timestamp })
+
+  await enqueue({
+    topic: 'process-greeting',
+    data: {
+      timestamp,
+      appName,
+      greetingPrefix: 'Hello',
+      requestId: Math.random().toString(36).substring(7),
+    },
+  })
+
+  return {
+    status: 200,
+    body: {
+      message: 'Hello request received! Processing in background.',
+      status: 'processing',
+      appName,
+    },
+  }
+}
+```
+
+### What's happening here
+
+- **HTTP trigger**: Listens for GET requests at `/hello`
+- **Response schema**: Defines the structure of the 200 response using Zod
+- **Enqueue**: Sends a message to the `process-greeting` queue for background processing
+- **Logger**: Records the request for observability
+
+## Step 2: Create the queue processor
+
+Create a file `steps/process-greeting.step.ts` that processes messages from the queue:
+
+```typescript steps/process-greeting.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+
+const inputSchema = z.object({
+  timestamp: z.string(),
+  appName: z.string(),
+  greetingPrefix: z.string(),
+  requestId: z.string(),
+})
+
+export const config = {
+  name: 'ProcessGreeting',
+  description: 'Processes greeting in the background',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'process-greeting',
+      input: inputSchema,
+    },
+  ],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (input, { logger, state }) => {
+  const { timestamp, appName, greetingPrefix, requestId } = input
+
+  logger.info('Processing greeting', { requestId, appName })
+
+  const greeting = `${greetingPrefix} ${appName}!`
+
+  await state.set('greetings', requestId, {
+    greeting,
+    processedAt: new Date().toISOString(),
+    originalTimestamp: timestamp,
+  })
+
+  logger.info('Greeting processed successfully', {
+    requestId,
+    greeting,
+    storedInState: true,
+  })
+}
+```
+
+### What's happening here
+
+- **Queue trigger**: Listens for messages on the `process-greeting` topic
+- **Input schema**: Validates incoming queue messages
+- **State management**: Stores the processed greeting using `state.set()`
+- **Logger**: Records processing steps
+
+## Step 3: Run your app
+
+Start the iii engine:
+
+```bash
+iii -c iii-config.yaml
+```
+
+The iii Console will start and display your running Steps.
+
+## Step 4: Test it
+
+Send a request to your endpoint:
+
+```bash
+curl http://localhost:3000/hello
+```
+
+You should see:
+
+```json
+{
+  "message": "Hello request received! Processing in background.",
+  "status": "processing",
+  "appName": "My First App"
+}
+```
+
+Check the iii Console logs to see:
+- The HTTP request being received
+- The message being enqueued
+- The background processor handling the greeting
+- The result being stored in state
+
+## What you learned
+
+<CardGroup cols={2}>
+  <Card title="HTTP triggers" icon="globe" href="/triggers/http">
+    Accept HTTP requests and return responses
+  </Card>
+  <Card title="Queue triggers" icon="list" href="/triggers/queue">
+    Process messages asynchronously in the background
+  </Card>
+  <Card title="State management" icon="database" href="/concepts/state-management">
+    Store and retrieve data across Steps
+  </Card>
+  <Card title="Context API" icon="code" href="/concepts/context">
+    Use enqueue, logger, and state from the context
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="REST API example" icon="server" href="/examples/rest-api">
+    Build a complete REST API with CRUD operations
+  </Card>
+  <Card title="Building APIs guide" icon="book" href="/guides/building-apis">
+    Learn best practices for API development
+  </Card>
+</CardGroup>

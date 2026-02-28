@@ -1,0 +1,425 @@
+---
+title: Middleware
+description: Use middleware to add cross-cutting concerns to HTTP triggers in Motia
+---
+
+Middleware allows you to add pre-processing and post-processing logic to HTTP triggers. Common use cases include authentication, logging, rate limiting, and request validation.
+
+## Basic usage
+
+Middleware is defined as a function that takes a request, context, and a `next` function:
+
+```typescript
+import type { ApiMiddleware } from 'motia'
+
+const loggingMiddleware: ApiMiddleware = async (req, ctx, next) => {
+  ctx.logger.info('Request received', {
+    method: req.request.method,
+    path: ctx.trigger.path,
+  })
+  
+  const response = await next()
+  
+  ctx.logger.info('Request completed', {
+    status: response?.status,
+  })
+  
+  return response
+}
+```
+
+Apply middleware to an HTTP trigger:
+
+```typescript
+import { http, step } from 'motia'
+import { loggingMiddleware } from './middleware/logging'
+
+export const { config, handler } = step(
+  {
+    name: 'GetUser',
+    triggers: [
+      http('GET', '/users/:id', {
+        middleware: [loggingMiddleware],
+      }),
+    ],
+  },
+  async ({ request }, ctx) => {
+    const userId = request.pathParams.id
+    // Handler logic
+    return { status: 200, body: { id: userId } }
+  },
+)
+```
+
+## Middleware signature
+
+The `ApiMiddleware` type is defined as:
+
+```typescript
+type ApiMiddleware<TBody = unknown, TEnqueueData = never> = (
+  req: MotiaHttpArgs<TBody>,
+  ctx: FlowContext<TEnqueueData, MotiaHttpArgs<TBody>>,
+  next: () => Promise<ApiResponse | void>,
+) => Promise<ApiResponse | void>
+```
+
+### Parameters
+
+- **`req`**: The HTTP request object containing:
+  - `request.method`: HTTP method
+  - `request.pathParams`: URL path parameters
+  - `request.queryParams`: Query string parameters
+  - `request.body`: Parsed request body
+  - `request.headers`: Request headers
+  - `response`: Response object for streaming
+
+- **`ctx`**: The flow context with access to:
+  - `logger`: Structured logging
+  - `state`: Key-value state store
+  - `enqueue`: Queue messages
+  - `streams`: Real-time streaming
+  - `traceId`: Current trace ID
+  - `trigger`: Trigger metadata
+
+- **`next`**: Function to invoke the next middleware or handler
+
+### Return value
+
+Middleware can:
+
+1. **Call `next()` and return its result** (pass through)
+2. **Call `next()` and modify the result** (transform response)
+3. **Return early without calling `next()`** (short-circuit)
+
+## Common patterns
+
+### Authentication
+
+```typescript
+import type { ApiMiddleware, ApiResponse } from 'motia'
+
+const authMiddleware: ApiMiddleware = async (req, ctx, next) => {
+  const token = req.request.headers.authorization
+  
+  if (!token) {
+    return {
+      status: 401,
+      body: { error: 'Missing authorization header' },
+    }
+  }
+  
+  const user = await validateToken(token)
+  
+  if (!user) {
+    return {
+      status: 401,
+      body: { error: 'Invalid token' },
+    }
+  }
+  
+  // Store user in state for handler to access
+  await ctx.state.set('request', ctx.traceId, { user })
+  
+  return next()
+}
+
+function validateToken(token: string) {
+  // Validate JWT or API key
+  return { id: 'user-123', email: 'alice@example.com' }
+}
+```
+
+Use it in your step:
+
+```typescript
+export const { config, handler } = step(
+  {
+    name: 'CreatePost',
+    triggers: [
+      http('POST', '/posts', {
+        middleware: [authMiddleware],
+        bodySchema: z.object({
+          title: z.string(),
+          content: z.string(),
+        }),
+      }),
+    ],
+  },
+  async ({ request }, ctx) => {
+    // Retrieve authenticated user
+    const { user } = await ctx.state.get('request', ctx.traceId)
+    
+    const post = {
+      id: crypto.randomUUID(),
+      authorId: user.id,
+      ...request.body,
+    }
+    
+    await ctx.state.set('posts', post.id, post)
+    
+    return { status: 201, body: post }
+  },
+)
+```
+
+### Rate limiting
+
+```typescript
+import type { ApiMiddleware } from 'motia'
+
+const rateLimitMiddleware: ApiMiddleware = async (req, ctx, next) => {
+  const clientIp = req.request.headers['x-forwarded-for'] || 'unknown'
+  const key = `rate-limit:${clientIp}`
+  
+  const current = await ctx.state.get<number>('rate-limits', key) || 0
+  
+  if (current >= 100) {
+    return {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+      body: { error: 'Rate limit exceeded' },
+    }
+  }
+  
+  // Increment counter
+  await ctx.state.update('rate-limits', key, [
+    { op: 'increment', path: [], value: 1 },
+  ])
+  
+  return next()
+}
+```
+
+<Warning>
+  This simple rate limiter doesn't expire counters. For production use, implement TTL-based expiration or use a dedicated rate limiting service.
+</Warning>
+
+### Request validation
+
+```typescript
+import type { ApiMiddleware } from 'motia'
+
+const validateContentType: ApiMiddleware = async (req, ctx, next) => {
+  const contentType = req.request.headers['content-type']
+  
+  if (!contentType?.includes('application/json')) {
+    return {
+      status: 415,
+      body: { error: 'Content-Type must be application/json' },
+    }
+  }
+  
+  return next()
+}
+```
+
+### Response transformation
+
+```typescript
+import type { ApiMiddleware } from 'motia'
+
+const addCorsHeaders: ApiMiddleware = async (req, ctx, next) => {
+  const response = await next()
+  
+  if (!response) return response
+  
+  return {
+    ...response,
+    headers: {
+      ...response.headers,
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE',
+    },
+  }
+}
+```
+
+### Error handling
+
+```typescript
+import type { ApiMiddleware } from 'motia'
+
+const errorHandler: ApiMiddleware = async (req, ctx, next) => {
+  try {
+    return await next()
+  } catch (error) {
+    ctx.logger.error('Request failed', {
+      error: error.message,
+      stack: error.stack,
+    })
+    
+    return {
+      status: 500,
+      body: {
+        error: 'Internal server error',
+        traceId: ctx.traceId,
+      },
+    }
+  }
+}
+```
+
+## Middleware composition
+
+Middleware executes in the order specified in the `middleware` array:
+
+```typescript
+export const { config, handler } = step(
+  {
+    name: 'ProtectedEndpoint',
+    triggers: [
+      http('POST', '/admin/users', {
+        middleware: [
+          errorHandler,        // Executes first (outer)
+          loggingMiddleware,   // Then this
+          rateLimitMiddleware, // Then this
+          authMiddleware,      // Then this (inner)
+          // Handler executes last
+        ],
+      }),
+    ],
+  },
+  async ({ request }, ctx) => {
+    // Handler logic
+  },
+)
+```
+
+Execution flow:
+
+```
+1. errorHandler (before next)
+2. loggingMiddleware (before next)
+3. rateLimitMiddleware (before next)
+4. authMiddleware (before next)
+5. handler
+6. authMiddleware (after next)
+7. rateLimitMiddleware (after next)
+8. loggingMiddleware (after next)
+9. errorHandler (after next)
+```
+
+## Reusable middleware
+
+Create a library of middleware functions:
+
+```typescript
+// middleware/index.ts
+export { authMiddleware } from './auth'
+export { rateLimitMiddleware } from './rate-limit'
+export { loggingMiddleware } from './logging'
+export { errorHandler } from './error-handler'
+```
+
+Use them across multiple steps:
+
+```typescript
+import { authMiddleware, errorHandler } from './middleware'
+
+export const { config, handler } = step(
+  {
+    name: 'GetPosts',
+    triggers: [
+      http('GET', '/posts', {
+        middleware: [errorHandler, authMiddleware],
+      }),
+    ],
+  },
+  async (req, ctx) => {
+    // Handler logic
+  },
+)
+```
+
+## Conditional middleware
+
+Use trigger conditions to apply middleware selectively:
+
+```typescript
+import { http, step } from 'motia'
+
+const requiresAuth = (input: unknown, ctx: FlowContext) => {
+  const path = ctx.trigger.path
+  return path?.startsWith('/admin')
+}
+
+export const { config, handler } = step(
+  {
+    name: 'MultiEndpoint',
+    triggers: [
+      http('GET', '/public/info', {
+        // No middleware
+      }),
+      http('GET', '/admin/users', {
+        middleware: [authMiddleware],
+      }, requiresAuth),
+    ],
+  },
+  async (req, ctx) => {
+    return ctx.match({
+      http: async ({ request }) => {
+        if (ctx.trigger.path === '/public/info') {
+          return { status: 200, body: { public: true } }
+        }
+        return { status: 200, body: { admin: true } }
+      },
+    })
+  },
+)
+```
+
+## Type-safe middleware
+
+Middleware can be generic over the request body type:
+
+```typescript
+import type { ApiMiddleware } from 'motia'
+import { z } from 'zod'
+
+type UserInput = { name: string; email: string }
+
+const validateUser: ApiMiddleware<UserInput> = async (req, ctx, next) => {
+  const { name, email } = req.request.body
+  
+  if (!name || !email) {
+    return {
+      status: 400,
+      body: { error: 'Name and email are required' },
+    }
+  }
+  
+  return next()
+}
+
+export const { config, handler } = step(
+  {
+    name: 'CreateUser',
+    triggers: [
+      http('POST', '/users', {
+        bodySchema: z.object({
+          name: z.string(),
+          email: z.string(),
+        }),
+        middleware: [validateUser],
+      }),
+    ],
+  },
+  async ({ request }, ctx) => {
+    // request.body is typed as UserInput
+    const user = { id: crypto.randomUUID(), ...request.body }
+    return { status: 201, body: user }
+  },
+)
+```
+
+## Limitations
+
+- Middleware only applies to `http` triggers, not `queue`, `cron`, `state`, or `stream` triggers
+- Middleware cannot modify the request body (it's read-only)
+- Middleware runs in the same process as your handler (no isolation)
+
+## Next steps
+
+- Learn about [observability](/advanced/observability)
+- Configure [infrastructure](/advanced/configuration)
+- Implement [testing strategies](/advanced/testing)

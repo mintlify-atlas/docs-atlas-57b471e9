@@ -1,0 +1,350 @@
+---
+title: Configuration
+description: Learn how to configure Motia and the iii engine for development and production environments
+---
+
+Motia uses two configuration files to manage your application:
+
+1. **`config.yaml`** - iii engine configuration (infrastructure modules)
+2. **`motia.config.ts`** - Authentication hooks (optional)
+
+## iii engine configuration
+
+The `config.yaml` file configures all infrastructure modules managed by the iii engine. This file lives in your project root and defines modules for streams, state, REST API, queues, cron, observability, and more.
+
+### Basic structure
+
+```yaml
+modules:
+  - class: modules::stream::StreamModule
+    config:
+      port: 3112
+      host: 127.0.0.1
+      adapter:
+        class: modules::stream::adapters::KvStore
+        config:
+          store_method: file_based
+          file_path: ./data/stream_store
+
+  - class: modules::state::StateModule
+    config:
+      adapter:
+        class: modules::state::adapters::KvStore
+        config:
+          store_method: file_based
+          file_path: ./data/state_store.db
+
+  - class: modules::api::RestApiModule
+    config:
+      port: 3111
+      host: 127.0.0.1
+      default_timeout: 30000
+      concurrency_request_limit: 1024
+
+  - class: modules::queue::QueueModule
+    config:
+      adapter:
+        class: modules::queue::BuiltinQueueAdapter
+
+  - class: modules::cron::CronModule
+    config:
+      adapter:
+        class: modules::cron::KvCronAdapter
+```
+
+### Environment variables
+
+You can use environment variable substitution with default values:
+
+```yaml
+modules:
+  - class: modules::observability::OtelModule
+    config:
+      enabled: ${OTEL_ENABLED:true}
+      service_name: ${OTEL_SERVICE_NAME:iii-engine}
+      service_version: ${SERVICE_VERSION:0.2.0}
+      exporter: ${OTEL_EXPORTER_TYPE:memory}
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+```
+
+The syntax is `${VAR_NAME:default_value}`. If `VAR_NAME` is not set, the default value is used.
+
+## Module configuration
+
+### Stream module
+
+Configures the real-time streaming server:
+
+```yaml
+- class: modules::stream::StreamModule
+  config:
+    port: 3112
+    host: 127.0.0.1
+    adapter:
+      class: modules::stream::adapters::KvStore
+      config:
+        store_method: file_based  # Options: in_memory, file_based
+        file_path: ./data/stream_store
+```
+
+### State module
+
+Configures the key-value state store:
+
+```yaml
+- class: modules::state::StateModule
+  config:
+    adapter:
+      class: modules::state::adapters::KvStore
+      config:
+        store_method: file_based  # Options: in_memory, file_based
+        file_path: ./data/state_store.db
+```
+
+<Warning>
+  Using `in_memory` storage will lose all data when the engine restarts. Use `file_based` for persistent state.
+</Warning>
+
+### REST API module
+
+Configures the HTTP server for API endpoints:
+
+```yaml
+- class: modules::api::RestApiModule
+  config:
+    port: 3111
+    host: 127.0.0.1
+    default_timeout: 30000  # milliseconds
+    concurrency_request_limit: 1024
+    cors:
+      allowed_origins:
+        - http://localhost:3000
+        - http://localhost:5173
+      allowed_methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+```
+
+### Queue module
+
+Configures the message queue system:
+
+```yaml
+- class: modules::queue::QueueModule
+  config:
+    adapter:
+      class: modules::queue::BuiltinQueueAdapter
+      config:
+        mode: concurrent  # Options: concurrent, sequential
+        max_attempts: 3
+        backoff_ms: 1000
+        concurrency: 10
+        poll_interval_ms: 100
+        store_method: in_memory  # Options: in_memory, file_based
+        file_path: ./.data/queue
+        save_interval_ms: 5000
+        channel_size: 256
+```
+
+### Observability module
+
+Configures OpenTelemetry for traces, metrics, and logs:
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    enabled: true
+    service_name: iii-engine
+    service_version: 0.2.0
+    service_namespace: production
+    
+    # Traces
+    exporter: memory  # Options: memory, otlp
+    endpoint: http://localhost:4317
+    sampling_ratio: 1.0
+    memory_max_spans: 10000
+    
+    # Metrics
+    metrics_enabled: true
+    metrics_exporter: memory
+    metrics_retention_seconds: 3600
+    metrics_max_count: 10000
+    
+    # Logs
+    logs_enabled: true
+    logs_exporter: memory
+    logs_max_count: 1000
+    logs_retention_seconds: 3600
+    logs_sampling_ratio: 1.0
+```
+
+See [Observability](/advanced/observability) for more details.
+
+### Shell execution module
+
+Configures the SDK process and hot-reload:
+
+```yaml
+- class: modules::shell::ExecModule
+  config:
+    watch:
+      - steps/**/*.ts
+      - motia.config.ts
+    exec:
+      - npx motia dev
+      - node dist/index-dev.js
+```
+
+The `exec` array defines commands to run in sequence. The engine will restart the process when files in `watch` change.
+
+## Motia configuration
+
+The `motia.config.ts` file is optional and exports authentication hooks for streams:
+
+```typescript
+import type { AuthenticateStream } from 'motia'
+
+export const authenticateStream: AuthenticateStream = async (req, context) => {
+  context.logger.info('Authenticating stream', { req })
+  
+  // Validate token from headers or query params
+  const token = req.headers.authorization || req.queryParams.token
+  
+  if (!token) {
+    throw new Error('Missing authentication token')
+  }
+  
+  // Return context that will be available in onJoin/onLeave hooks
+  return {
+    context: {
+      userId: 'user-123',
+      permissions: ['read', 'write'],
+    },
+  }
+}
+```
+
+## Infrastructure configuration
+
+You can configure resource limits for individual steps using the `infrastructure` option in queue triggers:
+
+```typescript
+import { queue, step } from 'motia'
+import { z } from 'zod'
+
+export const { config, handler } = step(
+  {
+    name: 'ProcessLargeFile',
+    triggers: [
+      queue('large-file-upload', {
+        input: z.object({ fileId: z.string() }),
+        infrastructure: {
+          handler: {
+            ram: 2048,     // MB
+            cpu: 2,        // vCPUs
+            timeout: 300,  // seconds
+          },
+          queue: {
+            type: 'fifo',           // 'fifo' | 'standard'
+            maxRetries: 5,
+            visibilityTimeout: 60,  // seconds
+            delaySeconds: 0,
+          },
+        },
+      }),
+    ],
+  },
+  async (input, ctx) => {
+    // Handler logic
+  },
+)
+```
+
+### HandlerConfig
+
+```typescript
+type HandlerConfig = {
+  ram: number      // Memory in MB
+  cpu?: number     // CPU cores (optional)
+  timeout: number  // Timeout in seconds
+}
+```
+
+### QueueConfig
+
+```typescript
+type QueueConfig = {
+  type: 'fifo' | 'standard'
+  maxRetries: number
+  visibilityTimeout: number  // seconds
+  delaySeconds: number       // seconds
+}
+```
+
+<Warning>
+  Infrastructure configuration is primarily used when deploying to cloud providers. In local development, these settings are informational and may not be enforced.
+</Warning>
+
+## Multiple environments
+
+You can create environment-specific config files:
+
+```bash
+config.yaml              # Development
+config-production.yaml   # Production
+config-staging.yaml      # Staging
+```
+
+Specify which config to use when starting the engine:
+
+```bash
+iii --config config-production.yaml
+```
+
+### Production configuration example
+
+```yaml
+modules:
+  - class: modules::stream::StreamModule
+    config:
+      port: ${STREAM_PORT:3112}
+      host: 0.0.0.0
+      adapter:
+        class: modules::stream::adapters::KvStore
+        config:
+          store_method: file_based
+          file_path: /var/lib/iii/stream_store
+
+  - class: modules::state::StateModule
+    config:
+      adapter:
+        class: modules::state::adapters::KvStore
+        config:
+          store_method: file_based
+          file_path: /var/lib/iii/state_store.db
+
+  - class: modules::api::RestApiModule
+    config:
+      port: ${PORT:3111}
+      host: 0.0.0.0
+      default_timeout: 30000
+      concurrency_request_limit: 2048
+
+  - class: modules::observability::OtelModule
+    config:
+      enabled: true
+      service_name: ${SERVICE_NAME:motia-app}
+      service_version: ${SERVICE_VERSION:1.0.0}
+      exporter: otlp
+      endpoint: ${OTEL_ENDPOINT:https://otel-collector.example.com:4317}
+      sampling_ratio: 0.1  # Sample 10% in production
+```
+
+## Next steps
+
+- Learn about [iii engine architecture](/advanced/iii-engine)
+- Configure [observability](/advanced/observability)
+- Explore [deployment strategies](/advanced/deployment)

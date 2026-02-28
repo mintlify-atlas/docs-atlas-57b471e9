@@ -1,0 +1,578 @@
+---
+title: GitHub PR manager
+description: Build automated GitHub PR workflows with code review, testing, and merge automation
+---
+
+This example demonstrates building an intelligent GitHub PR management system with:
+- Webhook-based PR event handling
+- Automated code review with AI
+- CI/CD integration
+- Automated merge policies
+- Status notifications
+
+<Card title="View source code" icon="github" href="https://github.com/MotiaDev/motia-examples/tree/main/examples/github-integration-workflow">
+  Complete source code on GitHub
+</Card>
+
+## Use cases
+
+- Automated PR reviews
+- Code quality checks
+- Auto-merge for approved PRs
+- PR status notifications
+- Developer productivity tracking
+
+## Architecture
+
+The workflow consists of:
+
+1. **Webhook receiver**: Handles GitHub webhook events
+2. **PR analyzer**: Analyzes code changes with AI
+3. **Test runner**: Triggers and monitors CI tests
+4. **Review poster**: Posts review comments
+5. **Merge coordinator**: Handles auto-merge logic
+
+## Prerequisites
+
+Set up GitHub integration:
+
+1. Create a GitHub App or personal access token
+2. Configure webhook URL: `https://your-app.com/webhooks/github`
+3. Subscribe to PR events: `pull_request`, `pull_request_review`, `check_run`
+4. Set webhook secret for security
+
+## Step 1: Receive GitHub webhooks
+
+Create `steps/github-webhook.step.ts` to handle webhook events:
+
+```typescript steps/github-webhook.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import crypto from 'crypto'
+
+export const config = {
+  name: 'GitHubWebhook',
+  description: 'Receive and validate GitHub webhook events',
+  triggers: [
+    {
+      type: 'http',
+      method: 'POST',
+      path: '/webhooks/github',
+      responseSchema: {
+        200: z.object({ received: z.boolean() }),
+        401: z.object({ error: z.string() }),
+      },
+    },
+  ],
+  enqueues: ['pr.opened', 'pr.updated', 'pr.reviewed'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (
+  request,
+  { enqueue, logger }
+) => {
+  // Verify webhook signature
+  const signature = request.headers['x-hub-signature-256'] as string
+  const payload = JSON.stringify(request.body)
+  
+  const expectedSignature = 'sha256=' + crypto
+    .createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET!)
+    .update(payload)
+    .digest('hex')
+
+  if (signature !== expectedSignature) {
+    logger.warn('Invalid webhook signature')
+    return { status: 401, body: { error: 'Invalid signature' } }
+  }
+
+  const event = request.headers['x-github-event'] as string
+  const body = request.body as any
+
+  logger.info('GitHub webhook received', {
+    event,
+    action: body.action,
+    pr: body.pull_request?.number,
+  })
+
+  // Route based on event type
+  switch (event) {
+    case 'pull_request':
+      if (body.action === 'opened' || body.action === 'synchronize') {
+        await enqueue({
+          topic: body.action === 'opened' ? 'pr.opened' : 'pr.updated',
+          data: {
+            prNumber: body.pull_request.number,
+            repository: body.repository.full_name,
+            title: body.pull_request.title,
+            author: body.pull_request.user.login,
+            headSha: body.pull_request.head.sha,
+            baseBranch: body.pull_request.base.ref,
+            url: body.pull_request.html_url,
+          },
+        })
+      }
+      break
+
+    case 'pull_request_review':
+      await enqueue({
+        topic: 'pr.reviewed',
+        data: {
+          prNumber: body.pull_request.number,
+          repository: body.repository.full_name,
+          reviewer: body.review.user.login,
+          state: body.review.state,
+        },
+      })
+      break
+  }
+
+  return { status: 200, body: { received: true } }
+}
+```
+
+## Step 2: Analyze PR with AI
+
+Create `steps/analyze-pr.step.ts` for AI code review:
+
+```typescript steps/analyze-pr.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import { Octokit } from '@octokit/rest'
+import OpenAI from 'openai'
+
+const inputSchema = z.object({
+  prNumber: z.number(),
+  repository: z.string(),
+  title: z.string(),
+  author: z.string(),
+  headSha: z.string(),
+  baseBranch: z.string(),
+  url: z.string(),
+})
+
+export const config = {
+  name: 'AnalyzePR',
+  description: 'Analyze PR changes with AI',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'pr.opened',
+      input: inputSchema,
+    },
+    {
+      type: 'queue',
+      topic: 'pr.updated',
+      input: inputSchema,
+    },
+  ],
+  enqueues: ['pr.review.ready'],
+} as const satisfies StepConfig
+
+const octokit = new Octokit({
+  auth: process.env.GITHUB_TOKEN,
+})
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { enqueue, logger, state }
+) => {
+  const { prNumber, repository, headSha } = input
+  const [owner, repo] = repository.split('/')
+
+  logger.info('Analyzing PR', { prNumber, repository })
+
+  // Get PR files and diff
+  const { data: files } = await octokit.pulls.listFiles({
+    owner,
+    repo,
+    pull_number: prNumber,
+  })
+
+  // Filter for relevant files (exclude assets, etc.)
+  const codeFiles = files.filter(
+    (f) =>
+      (f.filename.endsWith('.ts') ||
+        f.filename.endsWith('.tsx') ||
+        f.filename.endsWith('.js') ||
+        f.filename.endsWith('.jsx') ||
+        f.filename.endsWith('.py')) &&
+      f.patch
+  )
+
+  logger.info('Analyzing files', { count: codeFiles.length })
+
+  const reviews: any[] = []
+
+  // Analyze each file
+  for (const file of codeFiles.slice(0, 5)) {
+    // Limit to 5 files
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a senior software engineer performing code review.
+
+Provide feedback on:
+- Code quality and best practices
+- Potential bugs or issues
+- Security concerns
+- Performance considerations
+- Suggestions for improvement
+
+Be constructive and specific. Only comment if there are meaningful issues or suggestions.
+
+Respond with JSON:
+{
+  "hasIssues": boolean,
+  "severity": "info" | "warning" | "error",
+  "comments": [
+    {
+      "line": number,
+      "message": "feedback message"
+    }
+  ],
+  "summary": "overall assessment"
+}`,
+        },
+        {
+          role: 'user',
+          content: `File: ${file.filename}\n\nChanges:\n${file.patch}`,
+        },
+      ],
+    })
+
+    const review = JSON.parse(response.choices[0].message.content!)
+    if (review.hasIssues) {
+      reviews.push({
+        filename: file.filename,
+        ...review,
+      })
+    }
+  }
+
+  // Store analysis
+  await state.set('pr-analyses', `${repository}#${prNumber}`, {
+    prNumber,
+    repository,
+    headSha,
+    reviews,
+    analyzedAt: new Date().toISOString(),
+    filesAnalyzed: codeFiles.length,
+  })
+
+  logger.info('Analysis completed', {
+    prNumber,
+    reviewsFound: reviews.length,
+  })
+
+  // Enqueue for posting review
+  await enqueue({
+    topic: 'pr.review.ready',
+    data: {
+      prNumber,
+      repository,
+      headSha,
+      reviews,
+    },
+  })
+}
+```
+
+## Step 3: Post review comments
+
+Create `steps/post-review.step.ts` to post comments:
+
+```typescript steps/post-review.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import { Octokit } from '@octokit/rest'
+
+const inputSchema = z.object({
+  prNumber: z.number(),
+  repository: z.string(),
+  headSha: z.string(),
+  reviews: z.array(
+    z.object({
+      filename: z.string(),
+      severity: z.enum(['info', 'warning', 'error']),
+      comments: z.array(
+        z.object({
+          line: z.number(),
+          message: z.string(),
+        })
+      ),
+      summary: z.string(),
+    })
+  ),
+})
+
+export const config = {
+  name: 'PostReview',
+  description: 'Post AI-generated review comments to GitHub',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'pr.review.ready',
+      input: inputSchema,
+    },
+  ],
+} as const satisfies StepConfig
+
+const octokit = new Octokit({
+  auth: process.env.GITHUB_TOKEN,
+})
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { logger }
+) => {
+  const { prNumber, repository, headSha, reviews } = input
+  const [owner, repo] = repository.split('/')
+
+  logger.info('Posting review', { prNumber, reviewCount: reviews.length })
+
+  if (reviews.length === 0) {
+    // Post approval comment
+    await octokit.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      event: 'COMMENT',
+      body: '✅ Automated review passed! No issues found. Code looks good to me! 🚀',
+    })
+    return
+  }
+
+  // Build review comments
+  const comments = reviews.flatMap((review) =>
+    review.comments.map((comment) => ({
+      path: review.filename,
+      line: comment.line,
+      body: `${getSeverityIcon(review.severity)} ${comment.message}`,
+    }))
+  )
+
+  // Build review summary
+  const summary = [
+    '## 🤖 AI Code Review',
+    '',
+    `Found ${reviews.length} file(s) with potential issues:`,
+    '',
+    ...reviews.map((r) => `- **${r.filename}**: ${r.summary}`),
+    '',
+    '_This review was automatically generated. Please verify suggestions before applying._',
+  ].join('\n')
+
+  // Post review with comments
+  await octokit.pulls.createReview({
+    owner,
+    repo,
+    pull_number: prNumber,
+    commit_id: headSha,
+    event: 'COMMENT',
+    body: summary,
+    comments: comments.slice(0, 20), // GitHub limit
+  })
+
+  logger.info('Review posted', {
+    prNumber,
+    commentsPosted: comments.length,
+  })
+}
+
+function getSeverityIcon(severity: string): string {
+  switch (severity) {
+    case 'error':
+      return '🚨'
+    case 'warning':
+      return '⚠️'
+    case 'info':
+      return 'ℹ️'
+    default:
+      return '💡'
+  }
+}
+```
+
+## Step 4: Auto-merge logic
+
+Create `steps/auto-merge.step.ts` for automated merging:
+
+```typescript steps/auto-merge.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import { Octokit } from '@octokit/rest'
+
+const inputSchema = z.object({
+  prNumber: z.number(),
+  repository: z.string(),
+  reviewer: z.string(),
+  state: z.string(),
+})
+
+export const config = {
+  name: 'AutoMerge',
+  description: 'Auto-merge PRs when conditions are met',
+  triggers: [
+    {
+      type: 'queue',
+      topic: 'pr.reviewed',
+      input: inputSchema,
+    },
+  ],
+} as const satisfies StepConfig
+
+const octokit = new Octokit({
+  auth: process.env.GITHUB_TOKEN,
+})
+
+export const handler: Handlers<typeof config> = async (
+  input,
+  { logger, state }
+) => {
+  const { prNumber, repository, state: reviewState } = input
+  const [owner, repo] = repository.split('/')
+
+  logger.info('Checking auto-merge eligibility', { prNumber, reviewState })
+
+  // Get PR details
+  const { data: pr } = await octokit.pulls.get({
+    owner,
+    repo,
+    pull_number: prNumber,
+  })
+
+  // Check merge conditions
+  const conditions = {
+    hasApprovals: false,
+    ciPassed: false,
+    noRequestedChanges: false,
+    isNotDraft: !pr.draft,
+    hasAutoMergeLabel: pr.labels.some((l) => l.name === 'automerge'),
+  }
+
+  // Check reviews
+  const { data: reviews } = await octokit.pulls.listReviews({
+    owner,
+    repo,
+    pull_number: prNumber,
+  })
+
+  const latestReviews = getLatestReviews(reviews)
+  const approvalCount = latestReviews.filter((r) => r.state === 'APPROVED').length
+  const changesRequested = latestReviews.some((r) => r.state === 'CHANGES_REQUESTED')
+
+  conditions.hasApprovals = approvalCount >= 1
+  conditions.noRequestedChanges = !changesRequested
+
+  // Check CI status
+  const { data: checks } = await octokit.checks.listForRef({
+    owner,
+    repo,
+    ref: pr.head.sha,
+  })
+
+  conditions.ciPassed = checks.check_runs.every(
+    (check) => check.status === 'completed' && check.conclusion === 'success'
+  )
+
+  logger.info('Merge conditions', { prNumber, conditions })
+
+  // Store merge eligibility
+  await state.set('pr-merge-status', `${repository}#${prNumber}`, {
+    prNumber,
+    repository,
+    conditions,
+    checkedAt: new Date().toISOString(),
+  })
+
+  // Attempt merge if all conditions met
+  if (Object.values(conditions).every((c) => c === true)) {
+    logger.info('Auto-merging PR', { prNumber })
+
+    try {
+      await octokit.pulls.merge({
+        owner,
+        repo,
+        pull_number: prNumber,
+        merge_method: 'squash',
+      })
+
+      // Post success comment
+      await octokit.issues.createComment({
+        owner,
+        repo,
+        issue_number: prNumber,
+        body: '🎉 Auto-merged! All conditions were met.\n\n✅ Approvals received\n✅ CI passed\n✅ No changes requested',
+      })
+
+      logger.info('PR auto-merged successfully', { prNumber })
+    } catch (error: any) {
+      logger.error('Auto-merge failed', {
+        prNumber,
+        error: error.message,
+      })
+    }
+  } else {
+    logger.info('PR not eligible for auto-merge', { prNumber, conditions })
+  }
+}
+
+function getLatestReviews(reviews: any[]) {
+  const reviewsByUser = new Map()
+  for (const review of reviews) {
+    reviewsByUser.set(review.user.login, review)
+  }
+  return Array.from(reviewsByUser.values())
+}
+```
+
+## Configuration
+
+Set environment variables:
+
+```bash .env
+GITHUB_TOKEN=ghp_your_token_here
+GITHUB_WEBHOOK_SECRET=your_webhook_secret
+OPENAI_API_KEY=sk-your_openai_key
+```
+
+## Testing
+
+1. Open a PR in your GitHub repository
+2. Watch the iii Console for webhook processing
+3. See AI review comments appear on the PR
+4. Approve the PR to trigger auto-merge
+
+## What you learned
+
+<CardGroup cols={2}>
+  <Card title="Webhooks" icon="webhook" href="/triggers/http">
+    Handle GitHub webhook events
+  </Card>
+  <Card title="AI code review" icon="code-review">
+    Use LLMs to analyze code changes
+  </Card>
+  <Card title="Conditional workflows" icon="route" href="/guides/workflows">
+    Build complex automation logic
+  </Card>
+  <Card title="External APIs" icon="plug">
+    Integrate with GitHub API
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="More examples" icon="folder" href="https://github.com/MotiaDev/motia-examples">
+    Explore 20+ examples on GitHub
+  </Card>
+  <Card title="Deployment guide" icon="rocket" href="/advanced/deployment">
+    Deploy your workflows to production
+  </Card>
+</CardGroup>

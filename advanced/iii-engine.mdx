@@ -1,0 +1,354 @@
+---
+title: iii engine
+description: Understand the iii engine architecture and how it orchestrates Motia applications
+---
+
+The **iii engine** is a Rust-based runtime that powers Motia applications. It manages all infrastructure modules (streams, state, API, queues, cron, observability) and orchestrates SDK processes.
+
+## Architecture overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   iii engine                        │
+│                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
+│  │ REST API     │  │ Stream       │  │ State    │ │
+│  │ Module       │  │ Module       │  │ Module   │ │
+│  │ (Port 3111)  │  │ (Port 3112)  │  │          │ │
+│  └──────────────┘  └──────────────┘  └──────────┘ │
+│                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
+│  │ Queue        │  │ Cron         │  │ Otel     │ │
+│  │ Module       │  │ Module       │  │ Module   │ │
+│  └──────────────┘  └──────────────┘  └──────────┘ │
+│                                                     │
+│  ┌──────────────────────────────────────────────┐ │
+│  │           SDK Process Manager                │ │
+│  │     (Node.js / Bun / Python / Ruby)          │ │
+│  └──────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
+    HTTP Clients        WebSocket Clients     Queue Workers
+```
+
+The iii engine acts as a coordinator between infrastructure modules and your application code. Your steps run in an SDK process (Node.js, Bun, Python, etc.) that communicates with the engine via IPC.
+
+## Core modules
+
+### REST API module
+
+**Class**: `modules::api::RestApiModule`
+
+Handles HTTP requests and routes them to your step handlers. Features include:
+
+- Path parameter extraction (e.g., `/users/:id`)
+- Query parameter parsing
+- Request body parsing (JSON)
+- CORS support
+- Configurable timeouts
+- Request concurrency limits
+
+The module registers HTTP triggers from your steps and routes incoming requests to the appropriate handler functions.
+
+### Stream module
+
+**Class**: `modules::stream::StreamModule`
+
+Provides real-time WebSocket-based streaming:
+
+- Client connection management
+- Group and item-based subscriptions
+- Atomic update operations
+- Authentication hooks
+- `onJoin`/`onLeave` lifecycle events
+
+Clients connect to the stream server and subscribe to specific streams. Your steps can push updates to clients using `ctx.streams`.
+
+### State module
+
+**Class**: `modules::state::StateModule`
+
+Manages the key-value state store:
+
+- Get, set, update, delete operations
+- Group-based organization
+- Atomic updates with `UpdateOp`
+- State change triggers
+- Persistent or in-memory storage
+
+All state operations are traced and visible in the iii Console.
+
+### Queue module
+
+**Class**: `modules::queue::QueueModule`
+
+Handles asynchronous message processing:
+
+- Topic-based routing
+- Configurable retry logic
+- FIFO and standard queues
+- Visibility timeouts
+- Dead letter queues
+- Concurrent or sequential processing
+
+Steps enqueue messages using `ctx.enqueue()`, and the queue module routes them to subscribed steps.
+
+### Cron module
+
+**Class**: `modules::cron::CronModule`
+
+Executes scheduled tasks:
+
+- 7-field cron expressions (second precision)
+- Distributed execution (single instance)
+- Persistent job state
+- Condition-based filtering
+
+The module registers cron triggers from your steps and invokes handlers on schedule.
+
+### Observability module
+
+**Class**: `modules::observability::OtelModule`
+
+Provides OpenTelemetry integration:
+
+- Distributed tracing
+- Metrics collection
+- Structured logging
+- Memory or OTLP exporters
+- Configurable sampling
+
+See [Observability](/advanced/observability) for details.
+
+## SDK integration
+
+The iii engine communicates with SDK processes using a function registration protocol:
+
+### Function registration
+
+When your Motia app starts, the SDK:
+
+1. Loads all step files
+2. Registers each step's handler as a function with the engine
+3. Registers trigger configurations (HTTP, queue, cron, etc.)
+4. Waits for incoming events
+
+```typescript
+// Internal SDK code (simplified)
+const sdk = getInstance()
+
+// Register handler function
+sdk.registerFunction(
+  { id: 'steps::CreateUser::trigger::http(POST /users)' },
+  async (req) => {
+    // Your handler code runs here
+    return { status: 200, body: { id: 'user-123' } }
+  },
+)
+
+// Register HTTP trigger
+sdk.registerTrigger({
+  type: 'http',
+  function_id: 'steps::CreateUser::trigger::http(POST /users)',
+  config: {
+    api_path: 'users',
+    http_method: 'POST',
+  },
+})
+```
+
+### Function invocation
+
+When a trigger fires (HTTP request, queue message, cron schedule), the engine:
+
+1. Identifies the registered function for that trigger
+2. Invokes the function via IPC with the event data
+3. Waits for the function to return a response
+4. Handles retries, timeouts, and errors
+
+This architecture allows the engine to orchestrate infrastructure concerns (routing, retries, observability) while your code focuses on business logic.
+
+## Process management
+
+The `modules::shell::ExecModule` manages your SDK process:
+
+```yaml
+- class: modules::shell::ExecModule
+  config:
+    watch:
+      - steps/**/*.ts
+      - motia.config.ts
+    exec:
+      - npx motia dev
+      - node dist/index-dev.js
+```
+
+The module:
+
+1. Executes commands in the `exec` array sequentially
+2. Watches files in the `watch` array for changes
+3. Restarts the process when files change (hot reload)
+4. Manages process lifecycle (startup, shutdown, crashes)
+
+## Multi-language support
+
+The iii engine is language-agnostic. SDKs are available for:
+
+- **JavaScript/TypeScript** (`motia` npm package)
+- **Python** (`motia` PyPI package)
+- **Ruby** (beta)
+- **Go** (coming soon)
+
+Each SDK implements the same function registration protocol, allowing you to mix languages in a single application:
+
+```
+steps/
+  user-api.step.ts       # TypeScript
+  process-order.step.py  # Python
+  send-email.step.rb     # Ruby
+```
+
+The engine routes events to the appropriate SDK process based on the registered function ID.
+
+## Communication protocol
+
+The SDK communicates with the engine using JSON-RPC over stdin/stdout:
+
+```json
+// SDK → Engine: Register function
+{
+  "jsonrpc": "2.0",
+  "method": "register_function",
+  "params": {
+    "id": "steps::CreateUser::trigger::http(POST /users)",
+    "metadata": { "name": "CreateUser", "description": "..." }
+  },
+  "id": 1
+}
+
+// Engine → SDK: Invoke function
+{
+  "jsonrpc": "2.0",
+  "method": "invoke",
+  "params": {
+    "function_id": "steps::CreateUser::trigger::http(POST /users)",
+    "input": { "body": { "name": "Alice", "email": "alice@example.com" } }
+  },
+  "id": 2
+}
+
+// SDK → Engine: Function result
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "status_code": 200,
+    "body": { "id": "user-123" }
+  },
+  "id": 2
+}
+```
+
+This protocol is handled internally by the SDK. You don't need to implement it directly.
+
+## Performance characteristics
+
+### Rust core
+
+The engine is written in Rust for:
+
+- **Low latency**: Microsecond-level routing and dispatch
+- **High throughput**: Thousands of requests per second
+- **Memory efficiency**: Minimal overhead per connection
+- **Reliability**: Memory safety and crash recovery
+
+### SDK overhead
+
+Your handler code runs in a separate process:
+
+- **Node.js/Bun**: Fast startup, efficient for I/O-bound workloads
+- **Python**: Slower startup, good for CPU-bound workloads with native libraries
+- **Ruby**: Similar to Python, optimized for scripting
+
+The IPC overhead is minimal (< 1ms for typical payloads).
+
+## Deployment considerations
+
+### Single-process deployment
+
+For small applications, run the engine and SDK in a single container:
+
+```dockerfile
+FROM motia/iii-engine:latest
+
+WORKDIR /app
+COPY . .
+RUN npm install
+RUN motia build
+
+CMD ["iii", "--config", "config-production.yaml"]
+```
+
+### Distributed deployment
+
+For larger applications, run multiple SDK processes:
+
+```yaml
+# docker-compose.yml
+services:
+  iii-engine:
+    image: motia/iii-engine:latest
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    ports:
+      - "3111:3111"
+      - "3112:3112"
+
+  sdk-node:
+    image: node:20
+    volumes:
+      - ./dist:/app
+    command: node /app/index-production.js
+    depends_on:
+      - iii-engine
+```
+
+See [Deployment](/advanced/deployment) for production patterns.
+
+## Debugging
+
+### Engine logs
+
+The engine outputs structured logs to stdout:
+
+```
+2026-02-28T10:30:45Z INFO iii_engine::modules::api: Registered HTTP trigger function_id="steps::CreateUser::trigger::http(POST /users)" path="users" method="POST"
+2026-02-28T10:30:50Z INFO iii_engine::modules::api: HTTP request method="POST" path="/users" status=200 duration_ms=15
+```
+
+Filter logs by module:
+
+```bash
+iii 2>&1 | grep 'modules::queue'
+```
+
+### SDK logs
+
+Your application logs (via `ctx.logger`) are sent to the engine and visible in the iii Console.
+
+### iii Console
+
+The web-based console provides:
+
+- Real-time trace visualization
+- Step execution timelines
+- State operation history
+- Log aggregation by trace ID
+
+Access it at `http://localhost:3113` (default port).
+
+## Next steps
+
+- Configure [observability](/advanced/observability)
+- Implement [middleware](/advanced/middleware)
+- Learn about [deployment](/advanced/deployment)

@@ -1,0 +1,701 @@
+---
+title: HTTP trigger
+description: Trigger workflows with HTTP requests and build REST APIs
+---
+
+HTTP triggers allow you to expose workflows as HTTP endpoints, enabling you to build REST APIs, webhooks, and HTTP-based integrations.
+
+## Basic usage
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+    import { z } from 'zod'
+
+    export const config = step({
+      name: 'get-user',
+      triggers: [http('GET', '/users/:id')],
+    })
+
+    export const handler = async (input, ctx) => {
+      const userId = input.request.pathParams.id
+      
+      return {
+        status: 200,
+        body: { id: userId, name: 'John Doe' },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    config = step(
+        name='get-user',
+        triggers=[http('GET', '/users/:id')],
+    )
+
+    async def handler(input, ctx):
+        user_id = input['request']['pathParams']['id']
+        
+        return {
+            'status': 200,
+            'body': {'id': user_id, 'name': 'John Doe'},
+        }
+    ```
+  </Tab>
+</Tabs>
+
+## HTTP methods
+
+HTTP triggers support all standard HTTP methods:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+
+    export const config = step({
+      name: 'api-endpoints',
+      triggers: [
+        http('GET', '/items'),
+        http('POST', '/items'),
+        http('PUT', '/items/:id'),
+        http('DELETE', '/items/:id'),
+        http('PATCH', '/items/:id'),
+      ],
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    config = step(
+        name='api-endpoints',
+        triggers=[
+            http('GET', '/items'),
+            http('POST', '/items'),
+            http('PUT', '/items/:id'),
+            http('DELETE', '/items/:id'),
+            http('PATCH', '/items/:id'),
+        ],
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Request handling
+
+### Path parameters
+
+Extract dynamic values from the URL path:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+
+    export const config = step({
+      name: 'get-item',
+      triggers: [http('GET', '/items/:id')],
+    })
+
+    export const handler = async (input, ctx) => {
+      const { id } = input.request.pathParams
+      
+      return {
+        status: 200,
+        body: { id, name: 'Item' },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    config = step(
+        name='get-item',
+        triggers=[http('GET', '/items/:id')],
+    )
+
+    async def handler(input, ctx):
+        item_id = input['request']['pathParams']['id']
+        
+        return {
+            'status': 200,
+            'body': {'id': item_id, 'name': 'Item'},
+        }
+    ```
+  </Tab>
+</Tabs>
+
+### Query parameters
+
+Access query string parameters:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+
+    export const config = step({
+      name: 'search-items',
+      triggers: [
+        http('GET', '/search', {
+          queryParams: [
+            { name: 'q', description: 'Search query' },
+            { name: 'limit', description: 'Results limit' },
+          ],
+        }),
+      ],
+    })
+
+    export const handler = async (input, ctx) => {
+      const { q, limit } = input.request.queryParams
+      
+      return {
+        status: 200,
+        body: { query: q, limit: limit || '10' },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    config = step(
+        name='search-items',
+        triggers=[
+            http(
+                'GET',
+                '/search',
+                query_params=[
+                    {'name': 'q', 'description': 'Search query'},
+                    {'name': 'limit', 'description': 'Results limit'},
+                ],
+            ),
+        ],
+    )
+
+    async def handler(input, ctx):
+        q = input['request']['queryParams'].get('q')
+        limit = input['request']['queryParams'].get('limit', '10')
+        
+        return {
+            'status': 200,
+            'body': {'query': q, 'limit': limit},
+        }
+    ```
+  </Tab>
+</Tabs>
+
+### Request body
+
+Handle POST/PUT/PATCH request bodies with schema validation:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+    import { z } from 'zod'
+
+    const createItemSchema = z.object({
+      name: z.string(),
+      price: z.number(),
+      description: z.string().optional(),
+    })
+
+    export const config = step({
+      name: 'create-item',
+      triggers: [
+        http('POST', '/items', {
+          bodySchema: createItemSchema,
+        }),
+      ],
+    })
+
+    export const handler = async (input, ctx) => {
+      const { name, price, description } = input.request.body
+      
+      return {
+        status: 201,
+        body: {
+          id: 'item-123',
+          name,
+          price,
+          description,
+          created: true,
+        },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    config = step(
+        name='create-item',
+        triggers=[
+            http(
+                'POST',
+                '/items',
+                body_schema={
+                    'type': 'object',
+                    'properties': {
+                        'name': {'type': 'string'},
+                        'price': {'type': 'number'},
+                        'description': {'type': 'string'},
+                    },
+                    'required': ['name', 'price'],
+                },
+            ),
+        ],
+    )
+
+    async def handler(input, ctx):
+        body = input['request']['body']
+        
+        return {
+            'status': 201,
+            'body': {
+                'id': 'item-123',
+                'name': body['name'],
+                'price': body['price'],
+                'created': True,
+            },
+        }
+    ```
+  </Tab>
+</Tabs>
+
+### Headers
+
+Access request headers:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const handler = async (input, ctx) => {
+      const authHeader = input.request.headers['authorization']
+      const contentType = input.request.headers['content-type']
+      
+      return {
+        status: 200,
+        body: { authenticated: !!authHeader },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    async def handler(input, ctx):
+        auth_header = input['request']['headers'].get('authorization')
+        content_type = input['request']['headers'].get('content-type')
+        
+        return {
+            'status': 200,
+            'body': {'authenticated': bool(auth_header)},
+        }
+    ```
+  </Tab>
+</Tabs>
+
+## Response handling
+
+### Status codes
+
+Return different HTTP status codes:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const handler = async (input, ctx) => {
+      const { id } = input.request.pathParams
+      
+      // Simulate item not found
+      if (id === 'missing') {
+        return {
+          status: 404,
+          body: { error: 'Item not found' },
+        }
+      }
+      
+      return {
+        status: 200,
+        body: { id, name: 'Found Item' },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    async def handler(input, ctx):
+        item_id = input['request']['pathParams']['id']
+        
+        # Simulate item not found
+        if item_id == 'missing':
+            return {
+                'status': 404,
+                'body': {'error': 'Item not found'},
+            }
+        
+        return {
+            'status': 200,
+            'body': {'id': item_id, 'name': 'Found Item'},
+        }
+    ```
+  </Tab>
+</Tabs>
+
+### Response headers
+
+Set custom response headers:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    export const handler = async (input, ctx) => {
+      return {
+        status: 200,
+        headers: {
+          'X-Custom-Header': 'value',
+          'Cache-Control': 'max-age=3600',
+        },
+        body: { message: 'Success' },
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    async def handler(input, ctx):
+        return {
+            'status': 200,
+            'headers': {
+                'X-Custom-Header': 'value',
+                'Cache-Control': 'max-age=3600',
+            },
+            'body': {'message': 'Success'},
+        }
+    ```
+  </Tab>
+</Tabs>
+
+### Response schema
+
+Define response schemas for type safety:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+    import { z } from 'zod'
+
+    const successSchema = z.object({
+      id: z.string(),
+      name: z.string(),
+    })
+
+    const errorSchema = z.object({
+      error: z.string(),
+    })
+
+    export const config = step({
+      name: 'typed-response',
+      triggers: [
+        http('GET', '/items/:id', {
+          responseSchema: {
+            200: successSchema,
+            404: errorSchema,
+          },
+        }),
+      ],
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    config = step(
+        name='typed-response',
+        triggers=[
+            http(
+                'GET',
+                '/items/:id',
+                response_schema={
+                    200: {
+                        'type': 'object',
+                        'properties': {
+                            'id': {'type': 'string'},
+                            'name': {'type': 'string'},
+                        },
+                    },
+                    404: {
+                        'type': 'object',
+                        'properties': {
+                            'error': {'type': 'string'},
+                        },
+                    },
+                },
+            ),
+        ],
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Middleware
+
+Add middleware functions for cross-cutting concerns:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+    import type { ApiMiddleware } from 'motia'
+
+    const authMiddleware: ApiMiddleware = async (req, ctx, next) => {
+      const token = req.request.headers['authorization']
+      
+      if (!token) {
+        return {
+          status: 401,
+          body: { error: 'Unauthorized' },
+        }
+      }
+      
+      return await next()
+    }
+
+    const loggingMiddleware: ApiMiddleware = async (req, ctx, next) => {
+      ctx.logger.info('Request received', {
+        method: req.request.method,
+        path: ctx.trigger.path,
+      })
+      
+      return await next()
+    }
+
+    export const config = step({
+      name: 'protected-endpoint',
+      triggers: [
+        http('GET', '/protected', {
+          middleware: [loggingMiddleware, authMiddleware],
+        }),
+      ],
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    async def auth_middleware(req, ctx, next):
+        token = req['request']['headers'].get('authorization')
+        
+        if not token:
+            return {
+                'status': 401,
+                'body': {'error': 'Unauthorized'},
+            }
+        
+        return await next()
+
+    async def logging_middleware(req, ctx, next):
+        ctx.logger.info('Request received', {
+            'method': req['request']['method'],
+            'path': ctx.trigger['path'],
+        })
+        
+        return await next()
+
+    config = step(
+        name='protected-endpoint',
+        triggers=[
+            http(
+                'GET',
+                '/protected',
+                middleware=[logging_middleware, auth_middleware],
+            ),
+        ],
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Conditional triggers
+
+Use conditions to selectively execute handlers:
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { step, http } from 'motia'
+
+    export const config = step({
+      name: 'conditional-api',
+      triggers: [
+        http(
+          'POST',
+          '/webhooks',
+          undefined,
+          (input, ctx) => {
+            const signature = input.request.headers['x-webhook-signature']
+            return !!signature
+          },
+        ),
+      ],
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    from motia import step, http
+
+    def webhook_condition(input, ctx):
+        signature = input['request']['headers'].get('x-webhook-signature')
+        return bool(signature)
+
+    config = step(
+        name='conditional-api',
+        triggers=[
+            http('POST', '/webhooks', condition=webhook_condition),
+        ],
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration options
+
+<ParamField path="method" type="string" required>
+  HTTP method: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, or `HEAD`
+</ParamField>
+
+<ParamField path="path" type="string" required>
+  URL path pattern. Supports path parameters with `:param` syntax (e.g., `/users/:id`)
+</ParamField>
+
+<ParamField path="bodySchema" type="ZodSchema | JsonSchema">
+  Schema for validating request body. Automatically validates incoming requests
+</ParamField>
+
+<ParamField path="responseSchema" type="Record<number, Schema>">
+  Map of status codes to response schemas for type safety and documentation
+</ParamField>
+
+<ParamField path="queryParams" type="QueryParam[]">
+  Array of query parameter definitions:
+  - `name` (string): Parameter name
+  - `description` (string): Parameter description
+</ParamField>
+
+<ParamField path="middleware" type="ApiMiddleware[]">
+  Array of middleware functions executed before the handler. Each middleware can:
+  - Modify the request
+  - Return early with a response
+  - Call `next()` to continue the chain
+</ParamField>
+
+<ParamField path="condition" type="function">
+  Optional function `(input, ctx) => boolean` to conditionally execute the handler
+</ParamField>
+
+## Use cases
+
+### REST API
+
+Build a complete REST API:
+
+```typescript
+import { step, http } from 'motia'
+import { z } from 'zod'
+
+const itemSchema = z.object({
+  name: z.string(),
+  price: z.number(),
+})
+
+export const config = step({
+  name: 'items-api',
+  triggers: [
+    http('GET', '/items'),
+    http('GET', '/items/:id'),
+    http('POST', '/items', { bodySchema: itemSchema }),
+    http('PUT', '/items/:id', { bodySchema: itemSchema }),
+    http('DELETE', '/items/:id'),
+  ],
+})
+```
+
+### Webhook receiver
+
+Receive webhooks from external services:
+
+```typescript
+import { step, http } from 'motia'
+import { z } from 'zod'
+
+const webhookSchema = z.object({
+  event: z.string(),
+  data: z.record(z.unknown()),
+})
+
+export const config = step({
+  name: 'github-webhook',
+  triggers: [
+    http('POST', '/webhooks/github', {
+      bodySchema: webhookSchema,
+    }),
+  ],
+})
+
+export const handler = async (input, ctx) => {
+  const { event, data } = input.request.body
+  
+  ctx.logger.info('Webhook received', { event })
+  
+  // Process webhook
+  await ctx.enqueue({
+    topic: 'webhook-events',
+    data: { event, data },
+  })
+  
+  return {
+    status: 200,
+    body: { received: true },
+  }
+}
+```
+
+### File upload
+
+Handle file uploads:
+
+```typescript
+export const config = step({
+  name: 'upload-file',
+  triggers: [http('POST', '/upload')],
+})
+
+export const handler = async (input, ctx) => {
+  const file = input.request.body
+  
+  // Process file
+  ctx.logger.info('File uploaded', {
+    size: file.length,
+  })
+  
+  return {
+    status: 201,
+    body: { uploaded: true, fileId: 'file-123' },
+  }
+}
+```

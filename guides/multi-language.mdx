@@ -1,0 +1,439 @@
+---
+title: Using multiple languages together
+description: Learn how to combine TypeScript, JavaScript, and Python in a single Motia application
+---
+
+One of Motia's most powerful features is its ability to seamlessly combine TypeScript, JavaScript, and Python in the same application. Write each Step in the language that best fits the task.
+
+## Why multi-language?
+
+Different languages excel at different tasks:
+
+- **TypeScript/JavaScript**: Fast API endpoints, web integrations, real-time features
+- **Python**: Data science, machine learning, complex algorithms, existing Python libraries
+
+ With Motia, you can use the right tool for each job without managing separate services.
+
+## How it works
+
+Motia's iii engine automatically discovers and connects Steps regardless of language. Steps communicate through queue events - no special configuration needed.
+
+<Steps>
+
+<Step title="Create a TypeScript API endpoint">
+
+Start with a TypeScript API that receives requests:
+
+```typescript
+// steps/create-order.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+
+export const config = {
+  name: 'CreateOrder',
+  triggers: [
+    {
+      type: 'http',
+      method: 'POST',
+      path: '/orders',
+      bodySchema: z.object({
+        items: z.array(z.string()),
+        userId: z.string(),
+      }),
+    },
+  ],
+  enqueues: ['process.order'],
+  flows: ['multi-lang-example'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async ({ request }, { enqueue, logger }) => {
+  const { items, userId } = request.body
+  
+  logger.info('Order received', { items, userId })
+  
+  await enqueue({
+    topic: 'process.order',
+    data: {
+      orderId: `order-${Date.now()}`,
+      items,
+      userId,
+    },
+  })
+  
+  return {
+    status: 200,
+    body: { message: 'Order processing started' },
+  }
+}
+```
+
+</Step>
+
+<Step title="Process with Python">
+
+Create a Python Step that processes the order:
+
+```python
+# steps/process_order_step.py
+config = {
+    "name": "ProcessOrder",
+    "triggers": [
+        {
+            "type": "queue",
+            "topic": "process.order",
+        }
+    ],
+    "enqueues": ["order.completed"],
+    "flows": ["multi-lang-example"],
+}
+
+async def handler(input, ctx):
+    order_id = input["orderId"]
+    items = input["items"]
+    user_id = input["userId"]
+    
+    ctx.logger.info("Processing order in Python", {
+        "orderId": order_id,
+        "itemCount": len(items),
+    })
+    
+    # Use Python libraries for complex processing
+    import numpy as np
+    import pandas as pd
+    
+    # Analyze items
+    df = pd.DataFrame({"items": items})
+    analysis = perform_complex_analysis(df)
+    
+    # Store results
+    await ctx.state.set("orders", order_id, {
+        "orderId": order_id,
+        "userId": user_id,
+        "items": items,
+        "analysis": analysis,
+        "processedAt": pd.Timestamp.now().isoformat(),
+    })
+    
+    # Enqueue next step (can be TypeScript or Python)
+    await ctx.enqueue({
+        "topic": "order.completed",
+        "data": {
+            "orderId": order_id,
+            "userId": user_id,
+            "analysis": analysis,
+        },
+    })
+
+def perform_complex_analysis(df):
+    # Use Python's data science libraries
+    return {
+        "total_items": len(df),
+        "unique_items": df["items"].nunique(),
+    }
+```
+
+</Step>
+
+<Step title="Send notifications with TypeScript">
+
+Return to TypeScript for sending notifications:
+
+```typescript
+// steps/send-notification.step.ts
+import { queue } from 'motia'
+import { z } from 'zod'
+
+export const config = {
+  name: 'SendNotification',
+  triggers: [
+    queue('order.completed', {
+      input: z.object({
+        orderId: z.string(),
+        userId: z.string(),
+        analysis: z.object({
+          total_items: z.number(),
+          unique_items: z.number(),
+        }),
+      }),
+    }),
+  ],
+  enqueues: [],
+  flows: ['multi-lang-example'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (input, { logger }) => {
+  const { orderId, userId, analysis } = input
+  
+  logger.info('Sending notification', { orderId, userId })
+  
+  // Use TypeScript for web API integrations
+  await fetch('https://api.notifications.com/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId,
+      message: `Order ${orderId} processed: ${analysis.total_items} items`,
+    }),
+  })
+}
+```
+
+</Step>
+
+</Steps>
+
+## Real-world example: ChessArena.ai
+
+[ChessArena.ai](https://chessarena.ai) is a production app combining TypeScript and Python:
+
+**TypeScript Steps:**
+- HTTP APIs for user interactions
+- Real-time streaming of chess moves
+- WebSocket connections
+- State management
+
+**Python Steps:**
+- Stockfish chess engine integration
+- Move quality analysis
+- Position evaluation
+- Complex chess logic
+
+[View source code →](https://github.com/MotiaDev/chessarena-ai)
+
+## Python with machine learning
+
+Use Python for ML tasks:
+
+```python
+# steps/predict_step.py
+import torch
+import transformers
+from typing import Any
+
+config = {
+    "name": "PredictSentiment",
+    "triggers": [
+        {
+            "type": "queue",
+            "topic": "analyze.sentiment",
+        }
+    ],
+    "enqueues": ["sentiment.analyzed"],
+}
+
+# Load model once at module level
+model = transformers.pipeline(
+    "sentiment-analysis",
+    model="distilbert-base-uncased-finetuned-sst-2-english"
+)
+
+async def handler(input: dict[str, Any], ctx) -> None:
+    text = input["text"
+    message_id = input["messageId"]
+    
+    ctx.logger.info("Analyzing sentiment", {"messageId": message_id})
+    
+    # Run ML inference
+    result = model(text)[0]
+    
+    sentiment = {
+        "label": result["label"],
+        "score": float(result["score"]),
+        "text": text,
+    }
+    
+    # Store results
+    await ctx.state.set("sentiments", message_id, sentiment)
+    
+    # Enqueue next step
+    await ctx.enqueue({
+        "topic": "sentiment.analyzed",
+        "data": {
+            "messageId": message_id,
+            "sentiment": sentiment,
+        },
+    })
+```
+
+## TypeScript with web APIs
+
+Use TypeScript for modern web APIs:
+
+```typescript
+import { queue } from 'motia'
+import { Resend } from 'resend'
+import Stripe from 'stripe'
+
+const resend = new Resend(process.env.RESEND_API_KEY)
+const stripe = new Stripe(process.env.STRIPE_API_KEY)
+
+export const config = {
+  name: 'ProcessPayment',
+  triggers: [queue('payment.requested')],
+  enqueues: ['payment.completed'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (input, { logger, enqueue }) => {
+  const { amount, email, orderId } = input
+  
+  // Process payment with Stripe
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amount * 100,
+    currency: 'usd',
+    metadata: { orderId },
+  })
+  
+  // Send email with Resend
+  await resend.emails.send({
+    from: 'orders@example.com',
+    to: email,
+    subject: 'Payment Received',
+    html: `<p>Payment of $${amount} received for order ${orderId}</p>`,
+  })
+  
+  await enqueue({
+    topic: 'payment.completed',
+    data: { orderId, paymentIntent: paymentIntent.id },
+  })
+}
+```
+
+## Language-agnostic patterns
+
+### Queue communication
+
+All languages enqueue events the same way:
+
+<CodeGroup>
+
+```typescript TypeScript
+await enqueue({
+  topic: 'user.created',
+  data: { userId: '123', email: 'user@example.com' },
+})
+```
+
+```python Python
+await ctx.enqueue({
+    "topic": "user.created",
+    "data": {"userId": "123", "email": "user@example.com"},
+})
+```
+
+</CodeGroup>
+
+### State management
+
+State works identically across languages:
+
+<CodeGroup>
+
+```typescript TypeScript
+// Set
+await state.set('users', userId, userData)
+
+// Get
+const user = await state.get('users', userId)
+
+// List
+const users = await state.list('users')
+```
+
+```python Python
+# Set
+await ctx.state.set("users", user_id, user_data)
+
+# Get
+user = await ctx.state.get("users", user_id)
+
+# List
+users = await ctx.state.list("users")
+```
+
+</CodeGroup>
+
+### Logging
+
+Consistent logging across languages:
+
+<CodeGroup>
+
+```typescript TypeScript
+logger.info('Processing order', { orderId, userId })
+logger.error('Order failed', { error, orderId })
+```
+
+```python Python
+ctx.logger.info("Processing order", {"orderId": order_id, "userId": user_id})
+ctx.logger.error("Order failed", {"error": str(error), "orderId": order_id})
+```
+
+</CodeGroup>
+
+## Project structure
+
+Organize multi-language projects:
+
+```
+my-app/
+├── iii-config.yaml
+├── steps/
+│   ├── api/
+│   │   ├── create-order.step.ts
+│   │   └── get-order.step.ts
+│   ├── processing/
+│   │   ├── process_order_step.py
+│   │   └── analyze_step.py
+│   └── notifications/
+│       └── send-email.step.ts
+├── package.json
+└── requirements.txt
+```
+
+## Dependencies
+
+Manage dependencies per language:
+
+**TypeScript/JavaScript:**
+```json
+{
+  "dependencies": {
+    "motia": "latest",
+    "openai": "^4.0.0",
+    "stripe": "^14.0.0"
+  }
+}
+```
+
+**Python:**
+```txt
+motia
+numpy==1.24.0
+pandas==2.0.0
+torch==2.0.0
+transformers==4.30.0
+```
+
+## Performance considerations
+
+- TypeScript Steps start faster (cold start ~50ms)
+- Python Steps better for CPU-intensive tasks
+- Both languages share the same queue and state infrastructure
+- No serialization overhead between Steps
+
+## Related concepts
+
+<CardGroup cols={2}>
+  <Card title="Workflows" icon="diagram-project" href="/guides/workflows">
+    Build multi-step workflows
+  </Card>
+  <Card title="Background jobs" icon="clock" href="/guides/background-jobs">
+    Process work across languages
+  </Card>
+  <Card title="AI agents" icon="robot" href="/guides/ai-agents">
+    Combine TS APIs with Python ML
+  </Card>
+  <Card title="State management" icon="database" href="/concepts/state-management">
+    Share state across languages
+  </Card>
+</CardGroup>

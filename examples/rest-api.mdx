@@ -1,0 +1,329 @@
+---
+title: REST API
+description: Build a complete REST API with validation, state management, and background processing
+---
+
+This example shows how to build a production-ready REST API for a pet store with:
+- CRUD operations
+- Request validation with Zod schemas
+- Background order processing
+- State persistence
+- Event-driven architecture
+
+## Architecture overview
+
+The API consists of three Steps:
+1. **API trigger**: Handles POST requests and validates input
+2. **Order processor**: Processes food orders in the background
+3. **State audit**: Periodic job that checks for overdue orders
+
+## Step 1: Define types
+
+Create `steps/services/types.ts` for shared types:
+
+```typescript steps/services/types.ts
+import { z } from 'zod'
+
+export const petSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  photoUrl: z.string(),
+  createdAt: z.string(),
+})
+
+export const orderSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  quantity: z.number().min(1),
+  petId: z.string(),
+  shipDate: z.string(),
+  status: z.enum(['placed', 'processing', 'shipped', 'delivered']),
+  complete: z.boolean().optional(),
+})
+
+export type Pet = z.infer<typeof petSchema>
+export type Order = z.infer<typeof orderSchema>
+```
+
+## Step 2: Create the API endpoint
+
+Create `steps/api.step.ts` to handle pet creation and order placement:
+
+```typescript steps/api.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import { z } from 'zod'
+import { petStoreService } from './services/pet-store'
+import { petSchema } from './services/types'
+
+export const config = {
+  name: 'PetStoreAPI',
+  description: 'REST API for pet store operations',
+  triggers: [
+    {
+      type: 'http',
+      method: 'POST',
+      path: '/pets',
+      bodySchema: z.object({
+        pet: z.object({
+          name: z.string().min(1),
+          photoUrl: z.string().url(),
+        }),
+        foodOrder: z
+          .object({
+            quantity: z.number().min(1).max(100),
+          })
+          .optional(),
+      }),
+      responseSchema: {
+        200: petSchema,
+        400: z.object({ error: z.string() }),
+      },
+    },
+  ],
+  enqueues: ['process-food-order'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (
+  request,
+  { logger, traceId, enqueue }
+) => {
+  logger.info('Creating pet', { body: request.body })
+
+  const { pet, foodOrder } = request.body || {}
+  const newPetRecord = await petStoreService.createPet(pet)
+
+  // If food order included, enqueue for background processing
+  if (foodOrder) {
+    await enqueue({
+      topic: 'process-food-order',
+      data: {
+        quantity: foodOrder.quantity,
+        email: 'customer@example.com',
+        petId: newPetRecord.id,
+      },
+    })
+  }
+
+  return { status: 200, body: { ...newPetRecord, traceId } }
+}
+```
+
+### Key features
+
+- **Input validation**: Zod schemas validate request body and prevent invalid data
+- **Conditional enqueuing**: Only creates order if `foodOrder` is present
+- **Trace ID**: Automatically included for request tracking
+- **Type safety**: Response schema ensures type-safe responses
+
+## Step 3: Process orders in background
+
+Create `steps/process-food-order.step.ts` for background order processing:
+
+```typescript steps/process-food-order.step.ts
+import { http, queue, step } from 'motia'
+import { z } from 'zod'
+import { petStoreService } from './services/pet-store'
+
+const orderSchema = z.object({
+  email: z.string().email(),
+  quantity: z.number(),
+  petId: z.string(),
+})
+
+export const stepConfig = {
+  name: 'ProcessFoodOrder',
+  description: 'Process food orders and send notifications',
+  triggers: [
+    queue('process-food-order', { input: orderSchema }),
+    http('POST', '/process-order', { bodySchema: orderSchema }),
+  ],
+  enqueues: ['send-notification'],
+}
+
+export const { config, handler } = step(stepConfig, async (_input, ctx) => {
+  const data = ctx.getData()
+
+  ctx.logger.info('Processing food order', {
+    input: data,
+    traceId: ctx.traceId,
+    triggerType: ctx.trigger.type,
+  })
+
+  // Create order record
+  const order = await petStoreService.createOrder({
+    ...data,
+    shipDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    status: 'placed',
+  })
+
+  ctx.logger.info('Order created', { order })
+
+  // Persist to state
+  await ctx.state.set('orders', order.id, order)
+
+  // Enqueue notification
+  await ctx.enqueue({
+    topic: 'send-notification',
+    data: {
+      email: data.email,
+      templateId: 'new-order',
+      templateData: {
+        status: order.status,
+        shipDate: order.shipDate,
+        id: order.id,
+        petId: order.petId,
+        quantity: order.quantity,
+      },
+    },
+  })
+
+  // Return response only for HTTP triggers
+  return ctx.match({
+    http: async () => ({
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: { success: true, order },
+    }),
+  })
+})
+```
+
+### Advanced features
+
+- **Multi-trigger**: Handles both queue and HTTP triggers
+- **ctx.getData()**: Gets data regardless of trigger type
+- **ctx.match()**: Returns response only for HTTP triggers
+- **State persistence**: Stores orders for later retrieval
+- **Event chaining**: Enqueues notification after processing
+
+## Step 4: Add periodic audit job
+
+Create `steps/state-audit-cron.step.ts` to check for overdue orders:
+
+```typescript steps/state-audit-cron.step.ts
+import type { Handlers, StepConfig } from 'motia'
+import type { Order } from './services/types'
+
+export const config = {
+  name: 'StateAuditJob',
+  description: 'Check for overdue orders every 5 minutes',
+  triggers: [
+    {
+      type: 'cron',
+      expression: '0 0/5 * * * * *', // Every 5 minutes
+    },
+  ],
+  enqueues: ['send-notification'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (
+  _input,
+  { logger, state, enqueue }
+) => {
+  const orders = await state.list<Order>('orders')
+
+  for (const order of orders) {
+    const currentDate = new Date()
+    const shipDate = new Date(order.shipDate)
+
+    if (!order.complete && currentDate > shipDate) {
+      logger.warn('Order overdue', {
+        orderId: order.id,
+        shipDate: order.shipDate,
+        complete: order.complete,
+      })
+
+      await enqueue({
+        topic: 'send-notification',
+        data: {
+          email: 'admin@example.com',
+          templateId: 'order-audit-warning',
+          templateData: {
+            orderId: order.id,
+            status: order.status,
+            shipDate: order.shipDate,
+            message: 'Order is overdue and not complete',
+          },
+        },
+      })
+    }
+  }
+}
+```
+
+### Cron features
+
+- **Scheduled execution**: Runs automatically every 5 minutes
+- **State querying**: Lists all orders from state
+- **Conditional logic**: Only sends alerts for overdue orders
+- **Automated monitoring**: No manual intervention needed
+
+## Testing the API
+
+### Create a pet with food order
+
+```bash
+curl -X POST http://localhost:3000/pets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pet": {
+      "name": "Buddy",
+      "photoUrl": "https://example.com/buddy.jpg"
+    },
+    "foodOrder": {
+      "quantity": 5
+    }
+  }'
+```
+
+Response:
+
+```json
+{
+  "id": "pet-1234",
+  "name": "Buddy",
+  "photoUrl": "https://example.com/buddy.jpg",
+  "createdAt": "2026-02-28T10:00:00.000Z",
+  "traceId": "trace-5678"
+}
+```
+
+### Process order manually
+
+```bash
+curl -X POST http://localhost:3000/process-order \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "customer@example.com",
+    "quantity": 3,
+    "petId": "pet-1234"
+  }'
+```
+
+## What you learned
+
+<CardGroup cols={2}>
+  <Card title="Request validation" icon="shield-check">
+    Use Zod schemas to validate requests and responses
+  </Card>
+  <Card title="Multi-trigger Steps" icon="bolt">
+    Handle both HTTP and queue triggers in one Step
+  </Card>
+  <Card title="State management" icon="database">
+    Store and query data with state.set() and state.list()
+  </Card>
+  <Card title="Cron jobs" icon="clock" href="/triggers/cron">
+    Schedule periodic tasks with cron expressions
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Background worker" icon="gears" href="/examples/background-worker">
+    Build complex workflows with multiple workers
+  </Card>
+  <Card title="State management guide" icon="book" href="/concepts/state-management">
+    Learn advanced state patterns
+  </Card>
+</CardGroup>

@@ -1,0 +1,271 @@
+---
+title: motia-cli create
+description: Create a new Motia project with templates and automatic iii engine setup
+---
+
+The `motia-cli create` command scaffolds a new Motia project with pre-configured templates, dependencies, and the iii engine configuration.
+
+## Usage
+
+```bash
+motia-cli create [project-name]
+```
+
+If you don't provide a project name, the CLI will prompt you for one.
+
+## Interactive prompts
+
+The create command guides you through an interactive setup:
+
+### 1. Project folder name
+
+```bash
+Project folder name: my-app
+```
+
+- Creates a new directory with the specified name
+- Validates that the directory doesn't already exist
+- Press Enter twice to cancel project creation
+
+### 2. iii engine check
+
+```bash
+Do you have iii installed? (Y/n): 
+```
+
+- Checks if you have the iii engine installed
+- If you answer "no", provides installation instructions
+- Links to [https://iii.dev/docs](https://iii.dev/docs) for setup
+
+## What gets created
+
+The command creates a complete project structure:
+
+```
+my-app/
+├── package.json              # Project dependencies and scripts
+├── iii-config.yaml          # iii engine configuration
+├── steps/                   # Your Motia steps
+│   └── example.step.ts     # Sample HTTP step
+├── .gitignore              # Git ignore rules
+├── tsconfig.json           # TypeScript configuration (if applicable)
+└── README.md               # Project documentation
+```
+
+## Template selection
+
+Currently, the CLI automatically selects the Node.js template, which supports:
+
+- **TypeScript** - Fully typed development experience
+- **JavaScript** - ES modules with modern syntax
+- **Example steps** - Pre-configured HTTP and queue examples
+
+## Examples
+
+### Basic project creation
+
+```bash
+motia-cli create my-api
+```
+
+Output:
+```
+  ╭───────────────────────────────────────╮
+  │  == Welcome to Motia powered by iii   │
+  ╰───────────────────────────────────────╯
+
+  Project folder name: my-api
+  Do you have iii installed? (Y/n): Y
+
+  Creating project in ./my-api
+
+  ↓ package.json
+  ↓ iii-config.yaml
+  ↓ steps/example.step.ts
+  ↓ .gitignore
+
+  Installing dependencies...
+
+  ✓ Project created successfully!
+
+  Next steps:
+    cd my-api
+    iii -c iii-config.yaml
+```
+
+### Interactive mode
+
+Run without arguments to be prompted for all inputs:
+
+```bash
+motia-cli create
+```
+
+### Cancel during creation
+
+Press Enter twice when prompted for project name to cancel:
+
+```bash
+Project folder name: 
+Project folder name is required. Press Enter again to cancel.
+
+Project folder name: 
+Project creation cancelled.
+```
+
+## Post-creation steps
+
+After creating a project:
+
+### 1. Navigate to project directory
+
+```bash
+cd my-app
+```
+
+### 2. Review the configuration
+
+Check `iii-config.yaml` to understand the engine settings:
+
+```yaml
+name: my-app
+version: 1.0.0
+runtime: node
+port: 3000
+```
+
+### 3. Start the iii engine
+
+```bash
+iii -c iii-config.yaml
+```
+
+### 4. Access the iii Console
+
+Open your browser to view the dashboard:
+
+```
+http://localhost:3000
+```
+
+## Dependency installation
+
+The create command automatically runs `npm install` to set up dependencies:
+
+```bash
+Installing dependencies...
+```
+
+If installation fails, you can run it manually:
+
+```bash
+cd my-app
+npm install
+```
+
+## Troubleshooting
+
+### Directory already exists
+
+```bash
+Directory "my-app" already exists. Please choose a different name.
+```
+
+Solution: Choose a different project name or remove the existing directory.
+
+### GitHub API rate limit
+
+```bash
+GitHub API rate limit exceeded. Rate limit resets at 3:00:00 PM.
+Set GITHUB_TOKEN to increase your limit.
+```
+
+Solution: Set a GitHub personal access token:
+
+```bash
+export GITHUB_TOKEN=your_github_token
+motia-cli create my-app
+```
+
+### Connection timeout
+
+```bash
+Connection timed out. Check your internet connection and try again.
+```
+
+Solution: Verify your internet connection and retry. The CLI has a 30-second timeout for template downloads.
+
+### Failed dependency installation
+
+```bash
+Failed to install dependencies. Run "npm install" manually in ./my-app
+```
+
+Solution: Navigate to the project and install manually:
+
+```bash
+cd my-app
+npm install
+```
+
+## Advanced usage
+
+### Using with GitHub token
+
+For faster template downloads and avoiding rate limits:
+
+```bash
+GITHUB_TOKEN=ghp_your_token motia-cli create my-app
+```
+
+### Custom package manager
+
+After project creation, you can switch to your preferred package manager:
+
+```bash
+motia-cli create my-app
+cd my-app
+rm package-lock.json
+pnpm install  # or yarn install
+```
+
+## Template details
+
+### Files excluded from templates
+
+The following files are automatically excluded when downloading templates:
+
+- `package-lock.json` - Regenerated during installation
+- `README.md` - Project-specific documentation is generated
+
+### Package.json customization
+
+The CLI automatically updates `package.json` with your project name:
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "motia dev",
+    "build": "motia build"
+  }
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Development commands" icon="code" href="/api/cli/dev">
+    Run your project in development mode
+  </Card>
+  <Card title="Build commands" icon="hammer" href="/api/cli/build">
+    Create production builds
+  </Card>
+  <Card title="Defining steps" icon="stairs" href="/docs/concepts/steps">
+    Learn how to create Motia steps
+  </Card>
+  <Card title="iii configuration" icon="gear" href="/docs/concepts/iii-engine">
+    Configure the iii engine for your project
+  </Card>
+</CardGroup>

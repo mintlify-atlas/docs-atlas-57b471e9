@@ -1,0 +1,453 @@
+---
+title: Migration guide (v0.17 → v1.0)
+description: Migrate from Motia v0.17.x to Motia 1.0-RC powered by the iii engine.
+---
+
+# Migration guide
+
+This guide covers migrating from **Motia v0.17.x** to the **Motia 1.0-RC** framework. It is organized by area of concern so you can migrate incrementally.
+
+<Warning>
+Motia 1.0 introduces breaking changes. Please read this guide carefully before upgrading.
+</Warning>
+
+## Overview
+
+Motia 1.0 is now powered by the [iii engine](https://iii.dev), a Rust-based runtime that manages queues, state, streams, cron, and observability through a single `iii-config.yaml` configuration file.
+
+### Key changes
+
+- **iii engine required** — The Rust-based runtime replaces the old Node.js-based runtime
+- **Configuration changes** — `motia.config.ts` is replaced by `iii-config.yaml`
+- **Unified Step model** — All triggers (HTTP, queue, cron, state, stream) use the same Step primitive
+- **Simplified state management** — Direct access to state via `ctx.state`
+- **Improved streams** — Better WebSocket support and authentication
+- **No more plugins** — Plugin system replaced by iii modules
+
+## Installation
+
+### 1. Install the iii engine
+
+Install the iii engine before upgrading:
+
+<CodeGroup>
+  ```bash Homebrew
+  brew tap iii-dev/tap
+  brew install iii
+  ```
+
+  ```bash Shell script
+  curl -fsSL https://iii.dev/install.sh | sh
+  ```
+</CodeGroup>
+
+### 2. Update Motia packages
+
+<Tabs>
+  <Tab title="TypeScript/JavaScript">
+    ```bash
+    npm install motia@^1.0.0-rc
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```bash
+    pip install motia==1.0.0rc26
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration migration
+
+### Old: motia.config.ts
+
+In v0.17, configuration was handled by `motia.config.ts`:
+
+```ts Old (v0.17)
+import { defineConfig } from '@motiadev/core'
+import bullmqPlugin from '@motiadev/plugin-bullmq/plugin'
+import endpointPlugin from '@motiadev/plugin-endpoint/plugin'
+
+export default defineConfig({
+  plugins: [
+    bullmqPlugin,
+    endpointPlugin,
+  ],
+  streamAuth: {
+    authenticate: async (request) => {
+      // Auth logic
+    },
+  },
+})
+```
+
+### New: iii-config.yaml
+
+In v1.0, configuration is handled by `iii-config.yaml`:
+
+```yaml New (v1.0)
+modules:
+  - class: modules::api::RestApiModule
+    config:
+      port: 3111
+      host: 0.0.0.0
+
+  - class: modules::queue::QueueModule
+    config:
+      adapter:
+        class: modules::queue::adapters::InMemoryAdapter
+
+  - class: modules::stream::StreamModule
+    config:
+      port: 3112
+      auth_function: motia.stream.authenticate
+
+  - class: modules::state::StateModule
+    config:
+      adapter:
+        class: modules::state::adapters::KvStore
+        config:
+          store_method: file_based
+          file_path: ./data/state_store.db
+
+  - class: modules::cron::CronModule
+
+  - class: modules::observability::ObservabilityModule
+    config:
+      otlp_endpoint: http://localhost:4318
+
+shell:
+  entrypoint: dist/index.js
+  stdio: inherit
+```
+
+### Stream authentication
+
+Stream auth is now in a separate `motia.config.ts` file:
+
+```ts motia.config.ts
+import type { StreamAuthInput, StreamAuthResult } from 'motia'
+
+export async function authenticate(
+  request: StreamAuthInput
+): Promise<StreamAuthResult | null> {
+  // Extract token from request
+  const token = request.headers['authorization']?.replace('Bearer ', '')
+
+  if (!token) return null
+
+  // Validate token and return context
+  return {
+    userId: 'user-123',
+    permissions: ['read', 'write'],
+  }
+}
+```
+
+## Step migration
+
+### Unified config model
+
+In v0.17, HTTP endpoints and event handlers were separate. In v1.0, everything is a Step.
+
+<Tabs>
+  <Tab title="Old (v0.17)">
+    ```ts HTTP endpoint (old)
+    import { endpoint } from '@motiadev/core'
+
+    export default endpoint({
+      name: 'CreateUser',
+      method: 'POST',
+      path: '/users',
+    }, async (req, ctx) => {
+      return { status: 200, body: { ok: true } }
+    })
+    ```
+
+    ```ts Event handler (old)
+    import { event } from '@motiadev/core'
+
+    export default event({
+      name: 'ProcessUser',
+      topic: 'user.created',
+    }, async (data, ctx) => {
+      // Process user
+    })
+    ```
+  </Tab>
+
+  <Tab title="New (v1.0)">
+    ```ts HTTP trigger (new)
+    export const config = {
+      name: 'CreateUser',
+      triggers: [
+        {
+          type: 'http',
+          method: 'POST',
+          path: '/users',
+        }
+      ],
+      enqueues: ['user.created']
+    }
+
+    export const handler = async (req, { enqueue }) => {
+      await enqueue({
+        topic: 'user.created',
+        data: { id: '123' }
+      })
+      return { status: 200, body: { ok: true } }
+    }
+    ```
+
+    ```ts Queue trigger (new)
+    export const config = {
+      name: 'ProcessUser',
+      triggers: [
+        {
+          type: 'queue',
+          topic: 'user.created',
+        }
+      ],
+    }
+
+    export const handler = async (input, ctx) => {
+      // Process user
+      ctx.logger.info('Processing user', input)
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## State management
+
+### Old: Separate state plugin
+
+In v0.17, state was accessed through a plugin:
+
+```ts Old (v0.17)
+import { getState } from '@motiadev/plugin-states'
+
+const state = getState('users')
+await state.set('user-123', { name: 'John' })
+const user = await state.get('user-123')
+```
+
+### New: Direct access via context
+
+In v1.0, state is accessed directly through `ctx.state`:
+
+```ts New (v1.0)
+export const handler = async (input, { state }) => {
+  await state.set('users', 'user-123', { name: 'John' })
+  const user = await state.get('users', 'user-123')
+}
+```
+
+## Streams
+
+### Old: Stream configuration
+
+```ts Old (v0.17)
+import { defineStream } from '@motiadev/core'
+
+export default defineStream({
+  name: 'messages',
+  authenticate: async (ctx) => {
+    // Auth logic
+  },
+})
+```
+
+### New: Stream definition
+
+```ts New (v1.0)
+import { Stream } from 'motia'
+
+export const messages = new Stream({
+  name: 'messages',
+  onJoin: async (ctx) => {
+    // User joined stream
+  },
+  onLeave: async (ctx) => {
+    // User left stream
+  },
+})
+```
+
+Stream authentication is now global in `motia.config.ts`.
+
+## Middleware
+
+Middleware syntax has changed slightly:
+
+<Tabs>
+  <Tab title="Old (v0.17)">
+    ```ts
+    const authMiddleware = async (req, ctx, next) => {
+      if (!req.headers.authorization) {
+        return { status: 401, body: { error: 'Unauthorized' } }
+      }
+      return next()
+    }
+    ```
+  </Tab>
+
+  <Tab title="New (v1.0)">
+    ```ts
+    import type { ApiMiddleware } from 'motia'
+
+    const authMiddleware: ApiMiddleware = async (req, ctx, next) => {
+      if (!req.request.headers.authorization) {
+        return { status: 401, body: { error: 'Unauthorized' } }
+      }
+      return next()
+    }
+    ```
+
+    Note: Request is now `req.request` in v1.0.
+  </Tab>
+</Tabs>
+
+## New features in v1.0
+
+### State triggers
+
+React to state changes automatically:
+
+```ts
+export const config = {
+  name: 'OnUserUpdate',
+  triggers: [
+    {
+      type: 'state',
+    }
+  ],
+}
+
+export const handler = async (input, ctx) => {
+  const { group_id, item_id, old_value, new_value } = input
+  ctx.logger.info('State changed', { group_id, item_id, old_value, new_value })
+}
+```
+
+### Stream triggers
+
+React to stream events:
+
+```ts
+export const config = {
+  name: 'OnMessageCreated',
+  triggers: [
+    {
+      type: 'stream',
+      streamName: 'messages',
+      groupId: 'room-123',
+    }
+  ],
+}
+
+export const handler = async (input, ctx) => {
+  const { event, groupId, id } = input
+  if (event.type === 'create') {
+    ctx.logger.info('New message', event.data)
+  }
+}
+```
+
+### Multi-trigger Steps
+
+Steps can now have multiple triggers:
+
+```ts
+export const config = {
+  name: 'ProcessOrder',
+  triggers: [
+    {
+      type: 'http',
+      method: 'POST',
+      path: '/orders',
+    },
+    {
+      type: 'queue',
+      topic: 'order.created',
+    }
+  ],
+}
+
+export const handler = async (input, ctx) => {
+  // Use pattern matching to handle different triggers
+  return ctx.match({
+    http: async (req) => {
+      return { status: 200, body: { ok: true } }
+    },
+    queue: async (data) => {
+      ctx.logger.info('Processing order', data)
+    },
+  })
+}
+```
+
+## Migration checklist
+
+<Steps>
+  <Step title="Install iii engine">
+    ```bash
+    brew install iii-dev/tap/iii
+    ```
+  </Step>
+
+  <Step title="Update Motia packages">
+    ```bash
+    npm install motia@^1.0.0-rc
+    ```
+  </Step>
+
+  <Step title="Create iii-config.yaml">
+    Replace `motia.config.ts` with `iii-config.yaml`. See [Configuration](/advanced/configuration).
+  </Step>
+
+  <Step title="Migrate Steps">
+    Convert endpoints and events to the unified Step model.
+  </Step>
+
+  <Step title="Update state access">
+    Replace state plugin calls with `ctx.state`.
+  </Step>
+
+  <Step title="Update stream definitions">
+    Convert stream configurations to the new `Stream` class.
+  </Step>
+
+  <Step title="Update middleware">
+    Update middleware to use `req.request` instead of `req`.
+  </Step>
+
+  <Step title="Test your application">
+    Start the iii engine and test all endpoints, queues, and workflows.
+  </Step>
+</Steps>
+
+## Getting help
+
+If you encounter issues during migration:
+
+- Check the [iii engine documentation](https://iii.dev/docs)
+- Join our [Discord community](https://discord.gg/motia)
+- Review the [examples repository](https://github.com/MotiaDev/motia-examples)
+- Open an issue on [GitHub](https://github.com/MotiaDev/motia/issues)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" icon="book" href="/concepts/steps">
+    Learn about the new Step model
+  </Card>
+  <Card title="Configuration" icon="gear" href="/advanced/configuration">
+    Configure the iii engine
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/hello-world">
+    Explore migration examples
+  </Card>
+  <Card title="API reference" icon="brackets-curly" href="/api/typescript/step">
+    Review the new API
+  </Card>
+</CardGroup>

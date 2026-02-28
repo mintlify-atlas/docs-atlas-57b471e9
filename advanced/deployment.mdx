@@ -1,0 +1,507 @@
+---
+title: Deployment
+description: Deploy Motia applications to production environments
+---
+
+Motia applications can be deployed to any environment that supports containers or Node.js/Bun/Python runtimes. This guide covers common deployment patterns and best practices.
+
+## Build process
+
+Before deploying, build your application:
+
+```bash
+# Install dependencies
+npm install
+
+# Build the production bundle
+motia build
+```
+
+This generates:
+
+- `dist/index-production.js` - Production entry point
+- `dist/` - Compiled step handlers
+- `motia.lock.json` - Lock file with step metadata
+
+## Deployment options
+
+### Single-process deployment
+
+The simplest deployment runs the iii engine and SDK in a single container:
+
+```dockerfile
+FROM node:20-alpine
+
+# Install iii engine
+RUN curl -fsSL https://iii.dev/install.sh | sh
+
+WORKDIR /app
+
+# Copy application files
+COPY package*.json ./
+COPY config-production.yaml ./config.yaml
+COPY motia.config.ts .
+COPY steps/ ./steps/
+
+RUN npm ci --production
+RUN npx motia build
+
+EXPOSE 3111 3112
+
+CMD ["iii", "--config", "config.yaml"]
+```
+
+Build and run:
+
+```bash
+docker build -t motia-app .
+docker run -p 3111:3111 -p 3112:3112 motia-app
+```
+
+### Multi-process deployment
+
+For larger applications, separate the engine from SDK processes:
+
+```yaml
+# docker-compose.yml
+services:
+  iii-engine:
+    image: motia/iii-engine:latest
+    volumes:
+      - ./config-production.yaml:/app/config.yaml
+      - state-data:/var/lib/iii
+    ports:
+      - "3111:3111"
+      - "3112:3112"
+    environment:
+      - OTEL_ENABLED=true
+      - OTEL_EXPORTER_TYPE=otlp
+      - OTEL_ENDPOINT=http://otel-collector:4317
+
+  sdk:
+    build:
+      context: .
+      dockerfile: Dockerfile.sdk
+    depends_on:
+      - iii-engine
+    environment:
+      - NODE_ENV=production
+      - III_ENGINE_URL=http://iii-engine:3111
+
+volumes:
+  state-data:
+```
+
+```dockerfile
+# Dockerfile.sdk
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY dist/ ./dist/
+COPY motia.lock.json .
+
+RUN npm ci --production
+
+CMD ["node", "dist/index-production.js"]
+```
+
+### Serverless deployment
+
+Motia does not currently support serverless platforms (AWS Lambda, Vercel, etc.) because it requires the iii engine runtime. However, you can:
+
+1. Deploy the iii engine to a long-running instance (ECS, GKE, etc.)
+2. Deploy SDK processes as separate services
+3. Use managed queues (SQS, Pub/Sub) for event processing
+
+<Warning>
+  Serverless deployment patterns are under active development. Check the [roadmap](https://github.com/MotiaDev/motia/issues) for updates.
+</Warning>
+
+## Environment configuration
+
+Create environment-specific config files:
+
+### Development (`config.yaml`)
+
+```yaml
+modules:
+  - class: modules::stream::StreamModule
+    config:
+      port: 3112
+      host: 127.0.0.1
+      adapter:
+        class: modules::stream::adapters::KvStore
+        config:
+          store_method: in_memory
+
+  - class: modules::observability::OtelModule
+    config:
+      enabled: true
+      exporter: memory
+      sampling_ratio: 1.0
+```
+
+### Production (`config-production.yaml`)
+
+```yaml
+modules:
+  - class: modules::stream::StreamModule
+    config:
+      port: ${STREAM_PORT:3112}
+      host: 0.0.0.0
+      adapter:
+        class: modules::stream::adapters::KvStore
+        config:
+          store_method: file_based
+          file_path: /var/lib/iii/stream_store
+
+  - class: modules::observability::OtelModule
+    config:
+      enabled: true
+      exporter: otlp
+      endpoint: ${OTEL_ENDPOINT:http://otel-collector:4317}
+      sampling_ratio: 0.1  # Sample 10% in production
+```
+
+## Infrastructure as code
+
+### Kubernetes
+
+Deploy to Kubernetes with Helm or raw manifests:
+
+```yaml
+# k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: motia-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: motia-app
+  template:
+    metadata:
+      labels:
+        app: motia-app
+    spec:
+      containers:
+        - name: iii-engine
+          image: motia/iii-engine:latest
+          ports:
+            - containerPort: 3111
+              name: api
+            - containerPort: 3112
+              name: stream
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            - name: state
+              mountPath: /var/lib/iii
+          env:
+            - name: OTEL_ENABLED
+              value: "true"
+            - name: OTEL_ENDPOINT
+              value: "http://otel-collector:4317"
+      volumes:
+        - name: config
+          configMap:
+            name: motia-config
+        - name: state
+          persistentVolumeClaim:
+            claimName: motia-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: motia-app
+spec:
+  selector:
+    app: motia-app
+  ports:
+    - port: 80
+      targetPort: 3111
+      name: api
+    - port: 3112
+      targetPort: 3112
+      name: stream
+```
+
+Apply the manifests:
+
+```bash
+kubectl apply -f k8s/
+```
+
+### AWS ECS
+
+Deploy to ECS with Fargate:
+
+```json
+{
+  "family": "motia-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "containerDefinitions": [
+    {
+      "name": "iii-engine",
+      "image": "motia/iii-engine:latest",
+      "portMappings": [
+        { "containerPort": 3111, "protocol": "tcp" },
+        { "containerPort": 3112, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "OTEL_ENABLED", "value": "true" },
+        { "name": "OTEL_ENDPOINT", "value": "http://otel-collector:4317" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/motia-app",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "iii-engine"
+        }
+      }
+    }
+  ]
+}
+```
+
+Register the task definition:
+
+```bash
+aws ecs register-task-definition --cli-input-json file://task-definition.json
+```
+
+### Google Cloud Run
+
+Deploy to Cloud Run:
+
+```bash
+# Build and push image
+gcloud builds submit --tag gcr.io/PROJECT_ID/motia-app
+
+# Deploy
+gcloud run deploy motia-app \
+  --image gcr.io/PROJECT_ID/motia-app \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --port 3111 \
+  --set-env-vars="OTEL_ENABLED=true,OTEL_ENDPOINT=http://otel-collector:4317"
+```
+
+## Automated deployment
+
+The Motia repository uses GitHub Actions for CI/CD:
+
+### Deploy workflow
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build
+        run: npm run build
+      
+      - name: Publish to NPM (pre-release)
+        run: npm publish --tag pre-release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      
+      - name: Trigger E2E tests
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'e2e-tests.yml',
+              ref: 'main',
+              inputs: {
+                version: context.ref.replace('refs/tags/', '')
+              }
+            })
+```
+
+### E2E tests workflow
+
+```yaml
+# .github/workflows/e2e-tests.yml
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pre-release version
+        run: npm install motia@${{ github.event.inputs.version }} --tag pre-release
+      
+      - name: Run E2E tests
+        run: npm run test:e2e
+      
+      - name: Finalize release on success
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'finalize-release.yml',
+              ref: 'main',
+              inputs: { version: '${{ github.event.inputs.version }}' }
+            })
+      
+      - name: Rollback on failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'rollback-release.yml',
+              ref: 'main',
+              inputs: { version: '${{ github.event.inputs.version }}' }
+            })
+```
+
+See [DEPLOY_FLOW.md](https://github.com/MotiaDev/motia/blob/main/contributors/architecture/deploy/DEPLOY_FLOW.md) for the complete deployment flow.
+
+## Production checklist
+
+Before deploying to production:
+
+- [ ] Use `file_based` storage for state and streams (not `in_memory`)
+- [ ] Configure OTLP exporter for observability
+- [ ] Set appropriate sampling ratios (e.g., 0.1 for 10%)
+- [ ] Enable CORS with specific allowed origins (not `*`)
+- [ ] Use environment variables for secrets (not hardcoded)
+- [ ] Set up health checks (HTTP GET `/health`)
+- [ ] Configure resource limits (CPU, memory)
+- [ ] Enable rate limiting on public endpoints
+- [ ] Set up alerts for error rates and latency
+- [ ] Test rollback procedures
+- [ ] Document runbooks for common incidents
+
+## Monitoring
+
+### Health checks
+
+The iii engine exposes a health check endpoint:
+
+```bash
+curl http://localhost:3111/health
+# {"status":"ok"}
+```
+
+Use this for load balancer health checks.
+
+### Metrics
+
+Export metrics to Prometheus:
+
+```yaml
+- class: modules::observability::OtelModule
+  config:
+    metrics_enabled: true
+    metrics_exporter: otlp
+    endpoint: http://prometheus:9090
+```
+
+Key metrics to monitor:
+
+- `http.server.request.duration` (latency)
+- `http.server.request.count` (throughput)
+- `queue.message.duration` (queue processing time)
+- `state.operation.duration` (state performance)
+
+### Alerts
+
+Set up alerts for:
+
+- HTTP 5xx error rate > 1%
+- P95 latency > 1s
+- Queue processing failures > 10/min
+- Memory usage > 80%
+- CPU usage > 80%
+
+## Rollback procedures
+
+If a deployment fails:
+
+### 1. Revert to previous version
+
+```bash
+# Docker
+docker pull motia-app:previous
+docker run motia-app:previous
+
+# Kubernetes
+kubectl rollout undo deployment/motia-app
+
+# ECS
+aws ecs update-service --cluster motia-cluster --service motia-app --task-definition motia-app:123
+```
+
+### 2. Remove failed NPM package
+
+```bash
+npm unpublish motia@1.2.3 --force
+```
+
+### 3. Delete Git tag
+
+```bash
+git push --delete origin v1.2.3
+git tag -d v1.2.3
+```
+
+See [rollback.yml](https://github.com/MotiaDev/motia/blob/main/.github/workflows/rollback.yml) for automated rollback.
+
+## Security considerations
+
+- **Secrets**: Use environment variables, not hardcoded values
+- **CORS**: Restrict allowed origins in production
+- **Authentication**: Implement auth middleware for protected endpoints
+- **Rate limiting**: Prevent abuse with rate limiting middleware
+- **Input validation**: Always validate request bodies with schemas
+- **HTTPS**: Use TLS in production (terminate at load balancer)
+- **Network policies**: Restrict ingress/egress in Kubernetes
+
+## Next steps
+
+- Implement [testing strategies](/advanced/testing)
+- Configure [observability](/advanced/observability)
+- Learn about [middleware](/advanced/middleware)

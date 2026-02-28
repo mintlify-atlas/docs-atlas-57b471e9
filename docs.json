@@ -1,122 +1,143 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Motia",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#7C3AED",
+    "light": "#A78BFA",
+    "dark": "#5B21B6"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/motiadev/motia"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/motiadev/motia",
+      "twitter": "https://twitter.com/motiadev",
+      "discord": "https://discord.gg/motia"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation",
+              "migration-guide"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/steps",
+              "concepts/triggers",
+              "concepts/context",
+              "concepts/handlers",
+              "concepts/state-management",
+              "concepts/streams"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Triggers",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "triggers/http",
+              "triggers/queue",
+              "triggers/cron",
+              "triggers/state",
+              "triggers/stream"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Guides",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/building-apis",
+              "guides/background-jobs",
+              "guides/workflows",
+              "guides/ai-agents",
+              "guides/real-time-streaming",
+              "guides/multi-language"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/configuration",
+              "advanced/iii-engine",
+              "advanced/middleware",
+              "advanced/observability",
+              "advanced/deployment",
+              "advanced/testing"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "TypeScript/JavaScript",
             "pages": [
-              "api-reference/introduction"
+              "api/typescript/step",
+              "api/typescript/triggers",
+              "api/typescript/context",
+              "api/typescript/state-manager",
+              "api/typescript/streams",
+              "api/typescript/types"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Python",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/python/step",
+              "api/python/triggers",
+              "api/python/context",
+              "api/python/state-manager",
+              "api/python/streams",
+              "api/python/types"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "api/cli/overview",
+              "api/cli/create",
+              "api/cli/dev",
+              "api/cli/build"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "examples/hello-world",
+              "examples/rest-api",
+              "examples/background-worker"
+            ]
+          },
+          {
+            "group": "Production Apps",
+            "pages": [
+              "examples/chessarena",
+              "examples/ai-research-agent",
+              "examples/streaming-chatbot",
+              "examples/gmail-automation",
+              "examples/github-pr-manager"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }
