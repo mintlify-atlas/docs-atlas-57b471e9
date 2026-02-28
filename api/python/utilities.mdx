@@ -1,0 +1,356 @@
+---
+title: Utilities
+description: Utility functions and helpers exported by the Motia Python framework.
+---
+
+# Utilities
+
+Motia exports several utility functions and helpers for advanced use cases in Python.
+
+## Type guards
+
+### Trigger type guards
+
+Type guards for checking trigger types:
+
+```python
+from motia import is_api_trigger, is_queue_trigger, is_cron_trigger, is_state_trigger, is_stream_trigger
+from motia.types import TriggerConfig
+
+trigger: TriggerConfig = {
+    "type": "http",
+    "method": "GET",
+    "path": "/users",
+}
+
+if is_api_trigger(trigger):
+    print(f"{trigger['method']} {trigger['path']}")
+```
+
+<ParamField path="is_api_trigger" type="(trigger: TriggerConfig) -> bool">
+  Returns `True` if the trigger is an HTTP/API trigger
+</ParamField>
+
+<ParamField path="is_queue_trigger" type="(trigger: TriggerConfig) -> bool">
+  Returns `True` if the trigger is a queue trigger
+</ParamField>
+
+<ParamField path="is_cron_trigger" type="(trigger: TriggerConfig) -> bool">
+  Returns `True` if the trigger is a cron trigger
+</ParamField>
+
+<ParamField path="is_state_trigger" type="(trigger: TriggerConfig) -> bool">
+  Returns `True` if the trigger is a state trigger
+</ParamField>
+
+<ParamField path="is_stream_trigger" type="(trigger: TriggerConfig) -> bool">
+  Returns `True` if the trigger is a stream trigger
+</ParamField>
+
+### Step type guards
+
+Type guards for checking if a Step has specific trigger types:
+
+```python
+from motia import is_api_step, is_queue_step, is_cron_step, is_state_step, is_stream_step
+from motia.types import Step
+
+step: Step = {
+    "filePath": "steps/hello_step.py",
+    "config": {
+        "name": "Hello",
+        "triggers": [
+            {"type": "http", "method": "GET", "path": "/hello"}
+        ],
+    },
+}
+
+if is_api_step(step):
+    print("This step has HTTP triggers")
+```
+
+<ParamField path="is_api_step" type="(step: Step) -> bool">
+  Returns `True` if the step has at least one HTTP trigger
+</ParamField>
+
+<ParamField path="is_queue_step" type="(step: Step) -> bool">
+  Returns `True` if the step has at least one queue trigger
+</ParamField>
+
+<ParamField path="is_cron_step" type="(step: Step) -> bool">
+  Returns `True` if the step has at least one cron trigger
+</ParamField>
+
+<ParamField path="is_state_step" type="(step: Step) -> bool">
+  Returns `True` if the step has at least one state trigger
+</ParamField>
+
+<ParamField path="is_stream_step" type="(step: Step) -> bool">
+  Returns `True` if the step has at least one stream trigger
+</ParamField>
+
+## Trigger getters
+
+Functions to extract specific trigger types from a Step:
+
+```python
+from motia import get_api_triggers, get_queue_triggers
+from motia.types import Step
+
+step: Step = {
+    "filePath": "steps/multi_step.py",
+    "config": {
+        "name": "MultiTrigger",
+        "triggers": [
+            {"type": "http", "method": "POST", "path": "/orders"},
+            {"type": "queue", "topic": "order.created"},
+        ],
+    },
+}
+
+api_triggers = get_api_triggers(step)
+print(api_triggers[0]["method"])  # 'POST'
+
+queue_triggers = get_queue_triggers(step)
+print(queue_triggers[0]["topic"])  # 'order.created'
+```
+
+<ParamField path="get_api_triggers" type="(step: Step) -> list[ApiTrigger]">
+  Returns all HTTP triggers from a step
+</ParamField>
+
+<ParamField path="get_queue_triggers" type="(step: Step) -> list[QueueTrigger]">
+  Returns all queue triggers from a step
+</ParamField>
+
+<ParamField path="get_cron_triggers" type="(step: Step) -> list[CronTrigger]">
+  Returns all cron triggers from a step
+</ParamField>
+
+<ParamField path="get_state_triggers" type="(step: Step) -> list[StateTrigger]">
+  Returns all state triggers from a step
+</ParamField>
+
+<ParamField path="get_stream_triggers" type="(step: Step) -> list[StreamTrigger]">
+  Returns all stream triggers from a step
+</ParamField>
+
+## iii SDK utilities
+
+### ChannelReader and ChannelWriter
+
+Low-level streaming interfaces for request/response bodies:
+
+```python
+from motia import ChannelReader, ChannelWriter
+
+async def handler(args, ctx):
+    # Read request body as stream
+    reader: ChannelReader = args["request"].request_body
+    
+    # Write response as stream
+    writer: ChannelWriter = args["response"].stream
+    
+    args["response"].status(200)
+    args["response"].headers({"Content-Type": "text/plain"})
+    
+    # Stream response
+    async for chunk in reader:
+        await writer.write(chunk)
+    
+    args["response"].close()
+```
+
+<Note>
+ChannelReader and ChannelWriter are advanced APIs for streaming. Most use cases should use the simpler request.body and response APIs.
+</Note>
+
+## Runtime utilities
+
+### init_iii
+
+Initialize the iii engine connection:
+
+```python
+from motia import init_iii
+
+await init_iii()
+```
+
+<ParamField path="init_iii" type="() -> Awaitable[None]">
+  Initializes the connection to the iii engine. Automatically called by the framework.
+</ParamField>
+
+### get_instance
+
+Get the iii engine client instance:
+
+```python
+from motia import get_instance
+
+client = get_instance()
+```
+
+<ParamField path="get_instance" type="() -> IIIClient">
+  Returns the iii engine client instance for advanced use cases.
+</ParamField>
+
+### generate_step_id
+
+Generate a deterministic ID for a step based on its file path:
+
+```python
+from motia import generate_step_id
+
+step_id = generate_step_id("steps/hello_step.py")
+print(step_id)  # Deterministic hash
+```
+
+<ParamField path="generate_step_id" type="(file_path: str) -> str">
+  Generates a unique, deterministic ID for a step file.
+</ParamField>
+
+### setup_step_endpoint
+
+Low-level function to register a step with the iii engine:
+
+```python
+from motia import setup_step_endpoint
+
+async def my_handler(input, ctx):
+    return {"status": 200, "body": {"message": "Hello"}}
+
+await setup_step_endpoint(
+    file_path="steps/hello_step.py",
+    config={
+        "name": "Hello",
+        "triggers": [{"type": "http", "method": "GET", "path": "/hello"}],
+    },
+    handler=my_handler,
+)
+```
+
+<Warning>
+This is a low-level API. Most applications should use the file-based Step discovery instead.
+</Warning>
+
+### Motia class
+
+The core runtime class:
+
+```python
+from motia import Motia
+
+motia = Motia()
+```
+
+<Note>
+The Motia class is used internally by the framework. Most applications don't need to instantiate it directly.
+</Note>
+
+### stateManager
+
+Global state manager instance:
+
+```python
+from motia import stateManager
+
+# Access state outside of handlers (not recommended)
+value = await stateManager.get("users", "user-123")
+```
+
+<Warning>
+Prefer using `ctx.state` inside handlers instead of the global `stateManager` instance.
+</Warning>
+
+### schema_to_json_schema
+
+Convert Pydantic models to JSON Schema:
+
+```python
+from motia import schema_to_json_schema
+from pydantic import BaseModel
+
+class User(BaseModel):
+    name: str
+    email: str
+
+json_schema = schema_to_json_schema(User)
+```
+
+<ParamField path="schema_to_json_schema" type="(schema: type[BaseModel]) -> dict">
+  Converts a Pydantic model to JSON Schema format for API validation.
+</ParamField>
+
+## Tracing
+
+The `tracing` module provides OpenTelemetry integration:
+
+```python
+from motia import tracing
+
+# Configure tracing
+tracing.init(
+    service_name="my-service",
+    otlp_endpoint="http://localhost:4318",
+)
+```
+
+See [Observability](/advanced/observability) for more details on tracing configuration.
+
+## Step builders
+
+### StepBuilder and StepDefinition
+
+Builder pattern for creating steps:
+
+```python
+from motia import StepBuilder, StepDefinition
+from motia.triggers import http
+
+step_def: StepDefinition = (
+    StepBuilder()
+    .name("Hello")
+    .trigger(http(method="GET", path="/hello"))
+    .handler(lambda req, ctx: {"status": 200, "body": {"message": "Hello"}})
+    .build()
+)
+```
+
+### MultiTriggerStepBuilder
+
+Builder for multi-trigger steps:
+
+```python
+from motia import MultiTriggerStepBuilder, multi_trigger_step
+from motia.triggers import http, queue
+
+step = multi_trigger_step(
+    name="ProcessOrder",
+    triggers=[
+        http(method="POST", path="/orders"),
+        queue(topic="order.created"),
+    ],
+    handler=lambda input, ctx: ctx.match(
+        http=lambda req: {"status": 200, "body": {"ok": True}},
+        queue=lambda data: ctx.logger.info("Processing order", data),
+    ),
+)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Context API" icon="layer-group" href="/api/python/context">
+    Learn about the FlowContext API
+  </Card>
+  <Card title="Types" icon="brackets-curly" href="/api/python/types">
+    Explore all Python types
+  </Card>
+  <Card title="Step API" icon="cube" href="/api/python/step">
+    Create steps with the step() function
+  </Card>
+  <Card title="State manager" icon="database" href="/api/python/state-manager">
+    Manage application state
+  </Card>
+</CardGroup>

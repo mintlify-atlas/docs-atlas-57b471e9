@@ -1,0 +1,320 @@
+---
+title: Utilities
+description: Utility functions and helpers exported by the Motia framework.
+---
+
+# Utilities
+
+Motia exports several utility functions and helpers for advanced use cases.
+
+## Type guards
+
+### Trigger type guards
+
+Type guards for checking trigger types:
+
+```ts
+import { isApiTrigger, isQueueTrigger, isCronTrigger, isStateTrigger, isStreamTrigger } from 'motia'
+import type { TriggerConfig } from 'motia'
+
+const trigger: TriggerConfig = {
+  type: 'http',
+  method: 'GET',
+  path: '/users',
+}
+
+if (isApiTrigger(trigger)) {
+  // TypeScript knows trigger.method and trigger.path exist
+  console.log(trigger.method, trigger.path)
+}
+```
+
+<ParamField path="isApiTrigger" type="(trigger: TriggerConfig) => boolean">
+  Returns `true` if the trigger is an HTTP/API trigger
+</ParamField>
+
+<ParamField path="isQueueTrigger" type="(trigger: TriggerConfig) => boolean">
+  Returns `true` if the trigger is a queue trigger
+</ParamField>
+
+<ParamField path="isCronTrigger" type="(trigger: TriggerConfig) => boolean">
+  Returns `true` if the trigger is a cron trigger
+</ParamField>
+
+<ParamField path="isStateTrigger" type="(trigger: TriggerConfig) => boolean">
+  Returns `true` if the trigger is a state trigger
+</ParamField>
+
+<ParamField path="isStreamTrigger" type="(trigger: TriggerConfig) => boolean">
+  Returns `true` if the trigger is a stream trigger
+</ParamField>
+
+### Step type guards
+
+Type guards for checking if a Step has specific trigger types:
+
+```ts
+import { isApiStep, isQueueStep, isCronStep, isStateStep, isStreamStep } from 'motia'
+import type { Step } from 'motia'
+
+const step: Step = {
+  filePath: 'steps/hello.step.ts',
+  config: {
+    name: 'Hello',
+    triggers: [
+      { type: 'http', method: 'GET', path: '/hello' }
+    ],
+  },
+}
+
+if (isApiStep(step)) {
+  console.log('This step has HTTP triggers')
+}
+```
+
+<ParamField path="isApiStep" type="(step: Step) => boolean">
+  Returns `true` if the step has at least one HTTP trigger
+</ParamField>
+
+<ParamField path="isQueueStep" type="(step: Step) => boolean">
+  Returns `true` if the step has at least one queue trigger
+</ParamField>
+
+<ParamField path="isCronStep" type="(step: Step) => boolean">
+  Returns `true` if the step has at least one cron trigger
+</ParamField>
+
+<ParamField path="isStateStep" type="(step: Step) => boolean">
+  Returns `true` if the step has at least one state trigger
+</ParamField>
+
+<ParamField path="isStreamStep" type="(step: Step) => boolean">
+  Returns `true` if the step has at least one stream trigger
+</ParamField>
+
+## Trigger getters
+
+Functions to extract specific trigger types from a Step:
+
+```ts
+import { getApiTriggers, getQueueTriggers } from 'motia'
+import type { Step } from 'motia'
+
+const step: Step = {
+  filePath: 'steps/multi.step.ts',
+  config: {
+    name: 'MultiTrigger',
+    triggers: [
+      { type: 'http', method: 'POST', path: '/orders' },
+      { type: 'queue', topic: 'order.created' },
+    ],
+  },
+}
+
+const apiTriggers = getApiTriggers(step)
+console.log(apiTriggers[0].method) // 'POST'
+
+const queueTriggers = getQueueTriggers(step)
+console.log(queueTriggers[0].topic) // 'order.created'
+```
+
+<ParamField path="getApiTriggers" type="(step: Step) => ApiTrigger[]">
+  Returns all HTTP triggers from a step
+</ParamField>
+
+<ParamField path="getQueueTriggers" type="(step: Step) => QueueTrigger[]">
+  Returns all queue triggers from a step
+</ParamField>
+
+<ParamField path="getCronTriggers" type="(step: Step) => CronTrigger[]">
+  Returns all cron triggers from a step
+</ParamField>
+
+<ParamField path="getStateTriggers" type="(step: Step) => StateTrigger[]">
+  Returns all state triggers from a step
+</ParamField>
+
+<ParamField path="getStreamTriggers" type="(step: Step) => StreamTrigger[]">
+  Returns all stream triggers from a step
+</ParamField>
+
+## iii SDK utilities
+
+### getContext
+
+Get the current execution context (only available inside handlers):
+
+```ts
+import { getContext } from 'motia'
+
+export const handler = async (input, ctx) => {
+  // Alternative way to access context
+  const context = getContext()
+  context.logger.info('Using getContext')
+}
+```
+
+<ParamField path="getContext" type="() => FlowContext">
+  Returns the current FlowContext. Only works inside handler execution.
+</ParamField>
+
+### Logger
+
+Structured logging interface:
+
+```ts
+import type { Logger } from 'motia'
+
+interface Logger {
+  info(message: string, ...args: any[]): void
+  warn(message: string, ...args: any[]): void
+  error(message: string, ...args: any[]): void
+  debug(message: string, ...args: any[]): void
+}
+```
+
+Available via `ctx.logger` in handlers.
+
+### ChannelReader and ChannelWriter
+
+Low-level streaming interfaces for request/response bodies:
+
+```ts
+import type { ChannelReader, ChannelWriter } from 'motia'
+
+export const handler = async ({ request, response }, ctx) => {
+  // Read request body as stream
+  const reader: ChannelReader = request.requestBody
+  
+  // Write response as stream
+  const writer: ChannelWriter = response.stream
+  
+  response.status(200)
+  response.headers({ 'Content-Type': 'text/plain' })
+  
+  // Stream response
+  for await (const chunk of reader) {
+    await writer.write(chunk)
+  }
+  
+  response.close()
+}
+```
+
+<Note>
+ChannelReader and ChannelWriter are advanced APIs for streaming. Most use cases should use the simpler request.body and response APIs.
+</Note>
+
+## Runtime utilities
+
+### initIII
+
+Initialize the iii engine connection:
+
+```ts
+import { initIII } from 'motia'
+
+await initIII()
+```
+
+<ParamField path="initIII" type="() => Promise<void>">
+  Initializes the connection to the iii engine. Automatically called by the framework.
+</ParamField>
+
+### getInstance
+
+Get the iii engine client instance:
+
+```ts
+import { getInstance } from 'motia'
+
+const client = getInstance()
+```
+
+<ParamField path="getInstance" type="() => IIIClient">
+  Returns the iii engine client instance for advanced use cases.
+</ParamField>
+
+### generateStepId
+
+Generate a deterministic ID for a step based on its file path:
+
+```ts
+import { generateStepId } from 'motia'
+
+const stepId = generateStepId('steps/hello.step.ts')
+console.log(stepId) // Deterministic hash
+```
+
+<ParamField path="generateStepId" type="(filePath: string) => string">
+  Generates a unique, deterministic ID for a step file.
+</ParamField>
+
+### setupStepEndpoint
+
+Low-level function to register a step with the iii engine:
+
+```ts
+import { setupStepEndpoint } from 'motia'
+
+await setupStepEndpoint({
+  filePath: 'steps/hello.step.ts',
+  config: {
+    name: 'Hello',
+    triggers: [{ type: 'http', method: 'GET', path: '/hello' }],
+  },
+  handler: async (input, ctx) => {
+    return { status: 200, body: { message: 'Hello' } }
+  },
+})
+```
+
+<Warning>
+This is a low-level API. Most applications should use the file-based Step discovery instead.
+</Warning>
+
+### Motia class
+
+The core runtime class:
+
+```ts
+import { Motia } from 'motia'
+
+const motia = new Motia()
+```
+
+<Note>
+The Motia class is used internally by the framework. Most applications don't need to instantiate it directly.
+</Note>
+
+### stateManager
+
+Global state manager instance:
+
+```ts
+import { stateManager } from 'motia'
+
+// Access state outside of handlers (not recommended)
+const value = await stateManager.get('users', 'user-123')
+```
+
+<Warning>
+Prefer using `ctx.state` inside handlers instead of the global `stateManager` instance.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Context API" icon="layer-group" href="/api/typescript/context">
+    Learn about the FlowContext API
+  </Card>
+  <Card title="Types" icon="brackets-curly" href="/api/typescript/types">
+    Explore all TypeScript types
+  </Card>
+  <Card title="Step API" icon="cube" href="/api/typescript/step">
+    Create steps with the step() function
+  </Card>
+  <Card title="State manager" icon="database" href="/api/typescript/state-manager">
+    Manage application state
+  </Card>
+</CardGroup>

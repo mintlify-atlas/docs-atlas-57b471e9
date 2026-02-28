@@ -90,7 +90,8 @@
               "api/typescript/context",
               "api/typescript/state-manager",
               "api/typescript/streams",
-              "api/typescript/types"
+              "api/typescript/types",
+              "api/typescript/utilities"
             ]
           },
           {
@@ -101,7 +102,8 @@
               "api/python/context",
               "api/python/state-manager",
               "api/python/streams",
-              "api/python/types"
+              "api/python/types",
+              "api/python/utilities"
             ]
           },
           {
